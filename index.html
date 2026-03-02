@@ -1,697 +1,949 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-
-const KEY_REC = "hw_v10_records";
-const KEY_ROS = "hw_v10_roster";
-
-const STATUS = { OWED: "owed", SUB: "submitted", LOST: "lost" };
-
-function norm(s) {
-  return String(s || "").trim().toLowerCase();
-}
-function todayISO() {
-  return new Date().toISOString().slice(0, 10);
-}
-function uid() {
-  return Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 9);
-}
-function parseTime(iso) {
-  const t = Date.parse(iso);
-  return Number.isFinite(t) ? t : Number.POSITIVE_INFINITY;
-}
-function fmtDDMMMYY(iso) {
-  if (!iso) return "-";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return String(iso);
-  const day = String(d.getDate()).padStart(2, "0");
-  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  return day + "-" + months[d.getMonth()] + "-" + String(d.getFullYear()).slice(-2);
-}
-function uniqCI(list) {
-  const seen = new Set();
-  const out = [];
-  for (const x of list) {
-    const v = String(x || "").trim();
-    if (!v) continue;
-    const k = norm(v);
-    if (seen.has(k)) continue;
-    seen.add(k);
-    out.push(v);
-  }
-  return out;
-}
-function splitLines(text) {
-  return String(text || "")
-    .replaceAll("\r", "")
-    .split("\n")
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-function buildParentMessage(studentName, owedRows) {
-  const rows = [...owedRows].sort((a, b) => {
-    const ta = parseTime(a.dueDate);
-    const tb = parseTime(b.dueDate);
-    if (ta !== tb) return ta - tb;
-    return norm(a.homework).localeCompare(norm(b.homework));
-  });
-
-  const lines = [];
-  lines.push("Hi,");
-  lines.push("");
-  lines.push("Your child " + studentName + " has not submitted the following homework:");
-  lines.push("");
-  for (let i = 0; i < rows.length; i++) {
-    lines.push(String(i + 1) + ". " + fmtDDMMMYY(rows[i].dueDate) + " - " + rows[i].homework);
-  }
-  lines.push("");
-  lines.push("Please help to ensure that your child completed and submits the homework on time.");
-  lines.push("");
-  lines.push("Thank you.");
-  return lines.join("\n");
-}
-
-async function copyText(text) {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch (e) {
-    try {
-      const ta = document.createElement("textarea");
-      ta.value = text;
-      ta.style.position = "fixed";
-      ta.style.left = "-9999px";
-      document.body.appendChild(ta);
-      ta.focus();
-      ta.select();
-      const ok = document.execCommand("copy");
-      ta.remove();
-      return ok;
-    } catch (e2) {
-      return false;
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Homework Tracker</title>
+  <style>
+    :root{
+      --bg:#f8fafc;
+      --card:#ffffff;
+      --border:#e5e7eb;
+      --text:#0f172a;
+      --muted:#64748b;
+      --blue:#2563eb;
+      --green:#16a34a;
+      --red:#dc2626;
+      --dark:#0f172a;
     }
-  }
-}
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial;
+      background:var(--bg);
+      color:var(--text);
+      padding:14px;
+    }
+    .shell{max-width:720px;margin:0 auto}
+    .header{
+      border-radius:16px;
+      padding:14px;
+      color:#fff;
+      background: linear-gradient(135deg,#6D28D9 0%,#2563EB 60%,#06B6D4 100%);
+    }
+    .title{font-weight:900;font-size:18px}
+    .subtitle{opacity:.95;font-size:12px;margin-top:4px}
+    .top-actions{display:flex;gap:8px;flex-direction:column;align-items:flex-end}
+    .btn{
+      border:0;
+      border-radius:12px;
+      padding:8px 10px;
+      font-weight:900;
+      cursor:pointer;
+    }
+    .btn-ghost{
+      background: rgba(255,255,255,0.18);
+      color:#fff;
+      border:1px solid rgba(255,255,255,0.35);
+    }
+    .pills{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+    .pill{
+      background: rgba(255,255,255,0.18);
+      border:1px solid rgba(255,255,255,0.25);
+      padding:6px 10px;
+      border-radius:999px;
+      font-size:12px;
+      font-weight:900;
+    }
+    .tabs{
+      display:grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap:8px;
+      margin-top:12px;
+    }
+    .tab{
+      border:0;
+      border-radius:12px;
+      padding:10px 6px;
+      font-weight:900;
+      font-size:12px;
+      cursor:pointer;
+      background:#eef2ff;
+      color:var(--text);
+    }
+    .tab.active{background:var(--blue);color:#fff}
+    .card{
+      margin-top:10px;
+      background:var(--card);
+      border:1px solid var(--border);
+      border-radius:16px;
+      padding:12px;
+    }
+    .section-title{font-weight:900;margin-bottom:8px}
+    .hint{font-size:12px;color:var(--muted);margin-top:6px}
+    input, textarea{
+      width:100%;
+      padding:10px 12px;
+      border-radius:12px;
+      border:1px solid var(--border);
+      font-size:14px;
+      outline:none;
+      background:#fff;
+    }
+    textarea{min-height:120px;resize:vertical}
+    .primary{
+      width:100%;
+      border:0;
+      border-radius:12px;
+      padding:12px 12px;
+      font-weight:900;
+      color:#fff;
+      background:var(--blue);
+      cursor:pointer;
+    }
+    .grid-gap{display:grid;gap:8px}
+    .err{
+      border-color:#fca5a5 !important;
+      background:#fff5f5 !important;
+    }
+    .err-msg{font-size:12px;color:var(--red);margin-top:4px}
+    .record{
+      margin-top:10px;
+      background:#fff;
+      border:1px solid var(--border);
+      border-radius:16px;
+      padding:12px;
+    }
+    .record-top{display:flex;justify-content:space-between;gap:10px}
+    .namebtn{
+      border:0;
+      background:transparent;
+      padding:0;
+      text-align:left;
+      cursor:pointer;
+    }
+    .name{font-weight:900}
+    .muted{color:var(--muted)}
+    .tap{font-size:12px;color:var(--blue);font-weight:900;margin-top:2px}
+    .meta{font-weight:900;font-size:12px}
+    .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
+    .btn-green{background:var(--green);color:#fff}
+    .btn-red{background:var(--red);color:#fff}
+    .btn-dark{background:var(--dark);color:#fff}
+    .chip{
+      border:1px solid var(--border);
+      background:#f1f5f9;
+      color:var(--text);
+      border-radius:999px;
+      padding:6px 10px;
+      font-weight:900;
+      font-size:12px;
+      cursor:pointer;
+    }
 
-function Modal(props) {
-  return (
-    <div
-      onClick={props.onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.5)",
-        display: "flex",
-        justifyContent: "center",
-        alignItems: "flex-end",
-        padding: 14,
-        zIndex: 50,
-      }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: "100%",
-          maxWidth: 600,
-          background: "white",
-          borderRadius: 16,
-          border: "1px solid #e5e7eb",
-          padding: 12,
-          maxHeight: "80vh",
-          overflow: "auto",
-        }}
-      >
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-          <div style={{ fontWeight: 900 }}>{props.title}</div>
-          <button
-            type="button"
-            onClick={props.onClose}
-            style={{
-              borderRadius: 12,
-              border: "1px solid #e5e7eb",
-              background: "#f8fafc",
-              padding: "6px 10px",
-              fontWeight: 900,
-            }}
-          >
-            Close
-          </button>
+    /* Toast */
+    .toast-wrap{
+      position:fixed;left:0;right:0;bottom:18px;
+      display:flex;justify-content:center;padding:0 16px;z-index:60;
+    }
+    .toast{
+      max-width:720px;width:100%;
+      background: rgba(15,23,42,0.92);
+      color:#fff;border-radius:16px;
+      padding:12px 14px;font-weight:900;text-align:center;
+    }
+
+    /* Modal */
+    .modal-bg{
+      position:fixed;inset:0;background:rgba(0,0,0,0.5);
+      display:flex;justify-content:center;align-items:flex-end;
+      padding:14px;z-index:80;
+    }
+    .modal{
+      width:100%;max-width:720px;background:#fff;border-radius:16px;
+      border:1px solid var(--border);
+      padding:12px;max-height:80vh;overflow:auto;
+    }
+    .modal-head{display:flex;justify-content:space-between;gap:10px;align-items:center}
+    .modal-title{font-weight:900}
+    .btn-light{
+      border:1px solid var(--border);
+      background:#f8fafc;
+      border-radius:12px;
+      padding:6px 10px;
+      font-weight:900;
+      cursor:pointer;
+    }
+
+    @media (max-width:560px){
+      .tabs{grid-template-columns: repeat(3, 1fr);}
+      .top-actions{align-items:flex-start}
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="header">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+        <div>
+          <div class="title">Homework Tracker</div>
+          <div class="subtitle">Tap a student name to generate a parent message.</div>
         </div>
-        <div style={{ height: 10 }} />
-        {props.children}
+        <div class="top-actions">
+          <button id="btnResetHW" class="btn btn-ghost">Reset Homework</button>
+          <button id="btnResetRoster" class="btn btn-ghost">Reset Roster</button>
+        </div>
+      </div>
+      <div class="pills">
+        <div class="pill" id="pillOwed">Owed: 0</div>
+        <div class="pill" id="pillSub">Submitted: 0</div>
+        <div class="pill" id="pillLost">Lost: 0</div>
+        <div class="pill" id="pillClasses">Classes: 0</div>
       </div>
     </div>
-  );
-}
 
-const S = {
-  page: { minHeight: "100vh", padding: 14, background: "#f8fafc", fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial" },
-  shell: { maxWidth: 600, margin: "0 auto" },
-  header: { borderRadius: 16, padding: 14, color: "white", background: "linear-gradient(135deg,#6D28D9 0%,#2563EB 60%,#06B6D4 100%)" },
-  row: { display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" },
-  pill: { background: "rgba(255,255,255,0.18)", border: "1px solid rgba(255,255,255,0.25)", padding: "6px 10px", borderRadius: 999, fontSize: 12, fontWeight: 900 },
-  tabs: { display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 8, marginTop: 12 },
-  tabBtn: { border: 0, borderRadius: 12, padding: "10px 6px", fontWeight: 900, fontSize: 12 },
-  card: { marginTop: 10, background: "white", borderRadius: 16, border: "1px solid #e5e7eb", padding: 12 },
-  input: { width: "100%", padding: "10px 12px", borderRadius: 12, border: "1px solid #e5e7eb", fontSize: 14, boxSizing: "border-box" },
-  textarea: { width: "100%", minHeight: 120, padding: "10px 12px", borderRadius: 12, border: "1px solid #e5e7eb", fontSize: 14, boxSizing: "border-box", resize: "vertical" },
-  hint: { fontSize: 12, color: "#64748B", marginTop: 6 },
-  primary: { width: "100%", border: 0, borderRadius: 12, padding: "12px 12px", fontWeight: 900, color: "white", background: "#2563EB" },
-  btn: { border: 0, borderRadius: 10, padding: "8px 10px", fontWeight: 900, cursor: "pointer" },
-};
+    <div class="tabs" id="tabs"></div>
 
-export default function App() {
-  const [tab, setTab] = useState("add");
+    <!-- datalists -->
+    <datalist id="dlClasses"></datalist>
+    <datalist id="dlStudents"></datalist>
 
-  const [records, setRecords] = useState([]);
-  const [roster, setRoster] = useState([]);
+    <div id="view"></div>
+  </div>
 
-  const [dueDate, setDueDate] = useState(todayISO());
-  const [klass, setKlass] = useState("");
-  const [homework, setHomework] = useState("");
-  const [names, setNames] = useState(Array.from({ length: 15 }, () => ""));
-  const [nameErrors, setNameErrors] = useState({});
+  <!-- Toast -->
+  <div class="toast-wrap" id="toastWrap" style="display:none;">
+    <div class="toast" id="toastText"></div>
+  </div>
 
-  const [rosterClass, setRosterClass] = useState("");
-  const [rosterText, setRosterText] = useState("");
+  <!-- Modal -->
+  <div class="modal-bg" id="modalBg" style="display:none;">
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="modal-head">
+        <div class="modal-title" id="modalTitle"></div>
+        <button class="btn-light" id="modalClose">Close</button>
+      </div>
+      <div style="height:10px;"></div>
+      <div style="font-size:12px;color:#64748b;font-weight:900;">You can edit before sending.</div>
+      <div style="height:8px;"></div>
+      <textarea id="modalText" style="min-height:220px;"></textarea>
+      <div style="height:10px;"></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <button class="btn btn-green" id="modalCopy" style="flex:1 1 auto;">Copy text</button>
+        <button class="btn-light" id="modalDone">Done</button>
+      </div>
+    </div>
+  </div>
 
-  const [studentFilter, setStudentFilter] = useState("");
-  const [hwFilter, setHwFilter] = useState("");
-  const [classFilter, setClassFilter] = useState("");
+<script>
+(function(){
+  const KEY_REC = "hw_v11_records";
+  const KEY_ROS = "hw_v11_roster";
 
-  const [toast, setToast] = useState(null);
-  const toastTimer = useRef(null);
+  const STATUS = { OWED:"owed", SUB:"submitted", LOST:"lost" };
 
-  const [armHW, setArmHW] = useState(false);
-  const [armRoster, setArmRoster] = useState(false);
-  const armHWTimer = useRef(null);
-  const armRosterTimer = useRef(null);
-
-  const [msgOpen, setMsgOpen] = useState(false);
-  const [msgTitle, setMsgTitle] = useState("");
-  const [msgText, setMsgText] = useState("");
-
-  function showToast(t) {
-    setToast(t);
-    if (toastTimer.current) clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToast(null), 2400);
+  function norm(s){ return String(s||"").trim().toLowerCase(); }
+  function todayISO(){ return new Date().toISOString().slice(0,10); }
+  function uid(){ return Date.now().toString(36)+"_"+Math.random().toString(36).slice(2,9); }
+  function parseTime(iso){ const t=Date.parse(iso); return Number.isFinite(t)?t:Number.POSITIVE_INFINITY; }
+  function fmtDDMMMYY(iso){
+    if(!iso) return "-";
+    const d=new Date(iso);
+    if(Number.isNaN(d.getTime())) return String(iso);
+    const day=String(d.getDate()).padStart(2,"0");
+    const months=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    return day+"-"+months[d.getMonth()]+"-"+String(d.getFullYear()).slice(-2);
+  }
+  function uniqCI(list){
+    const seen=new Set(); const out=[];
+    for(const x of list){
+      const v=String(x||"").trim();
+      if(!v) continue;
+      const k=norm(v);
+      if(seen.has(k)) continue;
+      seen.add(k);
+      out.push(v);
+    }
+    return out;
+  }
+  function splitLines(text){
+    return String(text||"").replaceAll("\r","").split("\n").map(s=>s.trim()).filter(Boolean);
   }
 
-  useEffect(() => {
-    try {
+  function buildParentMessage(studentName, owedRows){
+    const rows=[...owedRows].sort((a,b)=>{
+      const ta=parseTime(a.dueDate), tb=parseTime(b.dueDate);
+      if(ta!==tb) return ta-tb;
+      return norm(a.homework).localeCompare(norm(b.homework));
+    });
+    const lines=[];
+    lines.push("Hi,");
+    lines.push("");
+    lines.push("Your child "+studentName+" has not submitted the following homework:");
+    lines.push("");
+    for(let i=0;i<rows.length;i++){
+      lines.push(String(i+1)+". "+fmtDDMMMYY(rows[i].dueDate)+" - "+rows[i].homework);
+    }
+    lines.push("");
+    lines.push("Please help to ensure that your child completed and submits the homework on time.");
+    lines.push("");
+    lines.push("Thank you.");
+    return lines.join("\n");
+  }
+
+  async function copyText(text){
+    try{
+      await navigator.clipboard.writeText(text);
+      return true;
+    }catch(e){
+      try{
+        const ta=document.createElement("textarea");
+        ta.value=text;
+        ta.style.position="fixed";
+        ta.style.left="-9999px";
+        document.body.appendChild(ta);
+        ta.focus(); ta.select();
+        const ok=document.execCommand("copy");
+        ta.remove();
+        return ok;
+      }catch(e2){ return false; }
+    }
+  }
+
+  // State
+  let tab = "add";
+  let records = [];
+  let roster = [];
+
+  // double-arm reset
+  let armHW = false, armRoster = false;
+  let armHWTimer = null, armRosterTimer = null;
+
+  // UI refs
+  const tabsEl = document.getElementById("tabs");
+  const viewEl = document.getElementById("view");
+  const dlClasses = document.getElementById("dlClasses");
+  const dlStudents = document.getElementById("dlStudents");
+
+  const pillOwed = document.getElementById("pillOwed");
+  const pillSub = document.getElementById("pillSub");
+  const pillLost = document.getElementById("pillLost");
+  const pillClasses = document.getElementById("pillClasses");
+
+  const toastWrap = document.getElementById("toastWrap");
+  const toastText = document.getElementById("toastText");
+
+  const modalBg = document.getElementById("modalBg");
+  const modalTitle = document.getElementById("modalTitle");
+  const modalText = document.getElementById("modalText");
+  const modalClose = document.getElementById("modalClose");
+  const modalCopy = document.getElementById("modalCopy");
+  const modalDone = document.getElementById("modalDone");
+
+  function showToast(msg){
+    toastText.textContent = msg;
+    toastWrap.style.display = "flex";
+    clearTimeout(showToast._t);
+    showToast._t = setTimeout(()=>{ toastWrap.style.display="none"; }, 2400);
+  }
+
+  function load(){
+    try{
       const a = JSON.parse(localStorage.getItem(KEY_REC) || "[]");
-      if (Array.isArray(a)) setRecords(a);
-    } catch (e) {}
-    try {
+      if(Array.isArray(a)) records = a;
+    }catch(e){ records=[]; }
+    try{
       const b = JSON.parse(localStorage.getItem(KEY_ROS) || "[]");
-      if (Array.isArray(b)) setRoster(b);
-    } catch (e2) {}
-  }, []);
+      if(Array.isArray(b)) roster = b;
+    }catch(e2){ roster=[]; }
+  }
 
-  useEffect(() => {
-    try { localStorage.setItem(KEY_REC, JSON.stringify(records)); } catch (e) {}
-  }, [records]);
+  function save(){
+    try{ localStorage.setItem(KEY_REC, JSON.stringify(records)); }catch(e){}
+    try{ localStorage.setItem(KEY_ROS, JSON.stringify(roster)); }catch(e2){}
+  }
 
-  useEffect(() => {
-    try { localStorage.setItem(KEY_ROS, JSON.stringify(roster)); } catch (e) {}
-  }, [roster]);
-
-  useEffect(() => {
-    if (!armHW) return;
-    if (armHWTimer.current) clearTimeout(armHWTimer.current);
-    armHWTimer.current = setTimeout(() => setArmHW(false), 3500);
-  }, [armHW]);
-
-  useEffect(() => {
-    if (!armRoster) return;
-    if (armRosterTimer.current) clearTimeout(armRosterTimer.current);
-    armRosterTimer.current = setTimeout(() => setArmRoster(false), 3500);
-  }, [armRoster]);
-
-  const rosterByClass = useMemo(() => {
+  function rosterByClass(){
     const m = new Map();
-    for (const e of roster) {
-      const c = String(e.className || "").trim();
-      const n = String(e.studentName || "").trim();
-      if (!c || !n) continue;
-      if (!m.has(c)) m.set(c, []);
+    for(const e of roster){
+      const c = String(e.className||"").trim();
+      const n = String(e.studentName||"").trim();
+      if(!c || !n) continue;
+      if(!m.has(c)) m.set(c, []);
       m.get(c).push(n);
     }
-    for (const [c, arr] of m.entries()) {
-      m.set(c, uniqCI(arr).sort((a, b) => norm(a).localeCompare(norm(b))));
+    for(const [c, arr] of m.entries()){
+      m.set(c, uniqCI(arr).sort((a,b)=>norm(a).localeCompare(norm(b))));
     }
     return m;
-  }, [roster]);
+  }
 
-  const classOptions = useMemo(() => {
+  function classOptions(){
     const s = new Set();
-    for (const e of roster) {
-      const c = String(e.className || "").trim();
-      if (c) s.add(c);
+    for(const e of roster){
+      const c = String(e.className||"").trim();
+      if(c) s.add(c);
     }
-    return Array.from(s).sort((a, b) => norm(a).localeCompare(norm(b)));
-  }, [roster]);
-
-  const suggestions = useMemo(() => {
-    const c = String(klass || "").trim();
-    if (!c || !rosterByClass.has(c)) return [];
-    return rosterByClass.get(c);
-  }, [klass, rosterByClass]);
-
-  const matchMap = useMemo(() => {
-    const c = String(klass || "").trim();
-    const m = new Map();
-    if (!c || !rosterByClass.has(c)) return m;
-    const list = rosterByClass.get(c);
-    for (let i = 0; i < list.length; i++) m.set(norm(list[i]), list[i]);
-    return m;
-  }, [klass, rosterByClass]);
-
-  const owedCount = useMemo(() => records.filter((r) => r.status === STATUS.OWED).length, [records]);
-  const subCount = useMemo(() => records.filter((r) => r.status === STATUS.SUB).length, [records]);
-  const lostCount = useMemo(() => records.filter((r) => r.status === STATUS.LOST).length, [records]);
-
-  function doResetHomework() {
-    if (!armHW) { setArmHW(true); return; }
-    const ok = window.confirm("Reset ALL homework records? Roster stays.");
-    if (!ok) { setArmHW(false); return; }
-    setRecords([]);
-    setNames(Array.from({ length: 15 }, () => ""));
-    setNameErrors({});
-    setArmHW(false);
-    showToast("Homework records reset.");
+    return Array.from(s).sort((a,b)=>norm(a).localeCompare(norm(b)));
   }
 
-  function doResetRoster() {
-    if (!armRoster) { setArmRoster(true); return; }
-    const ok = window.confirm("Reset ALL roster entries? Homework stays.");
-    if (!ok) { setArmRoster(false); return; }
-    setRoster([]);
-    setRosterClass("");
-    setRosterText("");
-    setArmRoster(false);
-    showToast("Roster reset.");
+  function updateStats(){
+    const owed = records.filter(r=>r.status===STATUS.OWED).length;
+    const sub = records.filter(r=>r.status===STATUS.SUB).length;
+    const lost = records.filter(r=>r.status===STATUS.LOST).length;
+    const cls = classOptions().length;
+    pillOwed.textContent = "Owed: " + owed;
+    pillSub.textContent = "Submitted: " + sub;
+    pillLost.textContent = "Lost: " + lost;
+    pillClasses.textContent = "Classes: " + cls;
   }
 
-  function saveDefaulters() {
-    const c = String(klass || "").trim();
-    const h = String(homework || "").trim();
-    if (!dueDate || !c || !h) { showToast("Fill Due Date, Class, Homework."); return; }
-    if (!rosterByClass.has(c)) { showToast("No roster for class " + c + ". Add it in Students tab."); return; }
+  function setTab(next){
+    tab = next;
+    renderTabs();
+    renderView();
+  }
 
-    const provided = [];
-    for (let i = 0; i < names.length; i++) {
-      const v = String(names[i] || "").trim();
-      if (v) provided.push({ v, idx: i });
+  function renderTabs(){
+    const items = [
+      ["add","Add"],
+      ["student","By Student"],
+      ["homework","By HW"],
+      ["class","By Class"],
+      ["students","Students"],
+      ["all","All"],
+    ];
+    tabsEl.innerHTML = "";
+    items.forEach(([k,label])=>{
+      const b = document.createElement("button");
+      b.className = "tab" + (tab===k ? " active" : "");
+      b.textContent = label;
+      b.onclick = ()=>setTab(k);
+      tabsEl.appendChild(b);
+    });
+  }
+
+  function renderDatalists(curClass){
+    // classes
+    const cls = classOptions();
+    dlClasses.innerHTML = "";
+    cls.forEach(c=>{
+      const o=document.createElement("option");
+      o.value=c;
+      dlClasses.appendChild(o);
+    });
+
+    // students for current class
+    const map = rosterByClass();
+    const list = (curClass && map.has(curClass)) ? map.get(curClass) : [];
+    dlStudents.innerHTML = "";
+    list.forEach(n=>{
+      const o=document.createElement("option");
+      o.value=n;
+      dlStudents.appendChild(o);
+    });
+  }
+
+  function openModal(title, text){
+    modalTitle.textContent = title;
+    modalText.value = text;
+    modalBg.style.display = "flex";
+  }
+  function closeModal(){
+    modalBg.style.display = "none";
+  }
+
+  modalClose.onclick = closeModal;
+  modalDone.onclick = closeModal;
+  modalBg.addEventListener("click", (e)=>{ if(e.target===modalBg) closeModal(); });
+
+  modalCopy.onclick = async function(){
+    const ok = await copyText(modalText.value);
+    showToast(ok ? "Copied." : "Copy failed.");
+  };
+
+  function renderView(){
+    updateStats();
+
+    // Build views
+    if(tab==="add"){ renderAdd(); return; }
+    if(tab==="students"){ renderStudents(); return; }
+    if(tab==="student"){ renderFilter("student"); return; }
+    if(tab==="homework"){ renderFilter("homework"); return; }
+    if(tab==="class"){ renderFilter("class"); return; }
+    if(tab==="all"){ renderAll(); return; }
+  }
+
+  function renderAdd(){
+    viewEl.innerHTML = "";
+
+    const card = document.createElement("div");
+    card.className="card";
+    card.innerHTML = `
+      <div class="section-title">Add defaulters (up to 15)</div>
+
+      <input id="inDue" type="date" />
+      <div class="hint">This date is the due date.</div>
+
+      <div style="height:10px"></div>
+      <input id="inClass" list="dlClasses" placeholder="Class (e.g., 4C)" />
+
+      <div style="height:10px"></div>
+      <input id="inHW" placeholder="Homework name" />
+
+      <div class="hint">Student Name suggestions will show only after you enter a Class that has a roster.</div>
+
+      <div style="height:10px"></div>
+      <div id="nameGrid" class="grid-gap"></div>
+
+      <div style="height:12px"></div>
+      <button id="btnSaveDef" class="primary">Save defaulters</button>
+    `;
+    viewEl.appendChild(card);
+
+    const inDue = document.getElementById("inDue");
+    const inClass = document.getElementById("inClass");
+    const inHW = document.getElementById("inHW");
+    const nameGrid = document.getElementById("nameGrid");
+    const btnSaveDef = document.getElementById("btnSaveDef");
+
+    inDue.value = todayISO();
+
+    // 15 inputs
+    const nameInputs = [];
+    const errMsgs = [];
+    for(let i=0;i<15;i++){
+      const wrap = document.createElement("div");
+
+      const inp = document.createElement("input");
+      inp.placeholder = "Student Name";
+      inp.setAttribute("list","dlStudents");
+
+      const msg = document.createElement("div");
+      msg.className="err-msg";
+      msg.style.display="none";
+
+      wrap.appendChild(inp);
+      wrap.appendChild(msg);
+
+      nameGrid.appendChild(wrap);
+      nameInputs.push(inp);
+      errMsgs.push(msg);
     }
-    if (provided.length === 0) { showToast("Enter at least 1 student name."); return; }
 
-    const errors = {};
-    const matched = [];
-    for (let i = 0; i < provided.length; i++) {
-      const it = provided[i];
-      const canonical = matchMap.get(norm(it.v));
-      if (!canonical) errors[it.idx] = "Not in class roster.";
-      else matched.push(canonical);
-    }
-    if (Object.keys(errors).length) {
-      setNameErrors(errors);
-      showToast("Unmatched names: " + Object.keys(errors).length);
-      return;
-    }
-
-    const unique = uniqCI(matched);
-    const newRecs = unique.map((studentName) => ({
-      id: uid(),
-      dueDate,
-      className: c,
-      studentName,
-      homework: h,
-      status: STATUS.OWED,
-    }));
-
-    setRecords((prev) => [...newRecs, ...prev]);
-    setNames(Array.from({ length: 15 }, () => ""));
-    setHomework("");
-    setNameErrors({});
-    showToast("Saved " + newRecs.length + " defaulter(s).");
-  }
-
-  function setStatus(id, status) {
-    setRecords((prev) => prev.map((r) => (r.id === id ? { ...r, status } : r)));
-  }
-
-  function openMessage(studentName) {
-    const owed = records
-      .filter((r) => r.status === STATUS.OWED && norm(r.studentName) === norm(studentName))
-      .map((r) => ({ homework: r.homework, dueDate: r.dueDate }));
-    if (!owed.length) { showToast("No owed homework for this student."); return; }
-
-    setMsgTitle("Message to parents - " + studentName);
-    setMsgText(buildParentMessage(studentName, owed));
-    setMsgOpen(true);
-  }
-
-  function saveRosterForClass() {
-    const c = String(rosterClass || "").trim();
-    if (!c) { showToast("Enter class first (e.g., 4C)."); return; }
-    const list = splitLines(rosterText);
-    if (!list.length) { showToast("Paste at least 1 name."); return; }
-
-    const existing = new Set(roster.map((e) => norm(e.className) + "|" + norm(e.studentName)));
-    const adds = [];
-    const uniq = uniqCI(list);
-    for (let i = 0; i < uniq.length; i++) {
-      const n = uniq[i];
-      const key = norm(c) + "|" + norm(n);
-      if (!existing.has(key)) {
-        existing.add(key);
-        adds.push({ className: c, studentName: n });
+    function clearErrors(){
+      for(let i=0;i<15;i++){
+        nameInputs[i].classList.remove("err");
+        errMsgs[i].style.display="none";
+        errMsgs[i].textContent="";
       }
     }
 
-    const merged = [...roster, ...adds].sort((a, b) => {
-      const ac = norm(a.className).localeCompare(norm(b.className));
-      if (ac !== 0) return ac;
-      return norm(a.studentName).localeCompare(norm(b.studentName));
+    function refreshStudentList(){
+      const c = String(inClass.value||"").trim();
+      renderDatalists(c);
+    }
+
+    inClass.addEventListener("input", ()=>{
+      refreshStudentList();
+      clearErrors();
     });
 
-    setRoster(merged);
-    setRosterText("");
-    showToast("Saved roster for " + c + ".");
+    btnSaveDef.onclick = ()=>{
+      const dueDate = String(inDue.value||"").trim();
+      const c = String(inClass.value||"").trim();
+      const hw = String(inHW.value||"").trim();
+
+      if(!dueDate || !c || !hw){
+        showToast("Fill Due Date, Class, Homework.");
+        return;
+      }
+
+      const map = rosterByClass();
+      if(!map.has(c)){
+        showToast("No roster for class "+c+". Add it in Students tab.");
+        return;
+      }
+
+      // match map
+      const m = new Map();
+      map.get(c).forEach(n=>m.set(norm(n), n));
+
+      const provided = [];
+      for(let i=0;i<15;i++){
+        const v = String(nameInputs[i].value||"").trim();
+        if(v) provided.push({v, idx:i});
+      }
+      if(provided.length===0){
+        showToast("Enter at least 1 student name.");
+        return;
+      }
+
+      clearErrors();
+
+      const matched = [];
+      let hasErr = false;
+
+      for(const it of provided){
+        const canon = m.get(norm(it.v));
+        if(!canon){
+          hasErr = true;
+          nameInputs[it.idx].classList.add("err");
+          errMsgs[it.idx].textContent = "Not in class roster.";
+          errMsgs[it.idx].style.display = "block";
+        }else{
+          matched.push(canon);
+        }
+      }
+
+      if(hasErr){
+        showToast("Unmatched names found. Please fix highlighted boxes.");
+        return;
+      }
+
+      const unique = uniqCI(matched);
+      const newRecs = unique.map(studentName=>({
+        id: uid(),
+        dueDate: dueDate,
+        className: c,
+        studentName: studentName,
+        homework: hw,
+        status: STATUS.OWED
+      }));
+
+      records = newRecs.concat(records);
+      save();
+
+      // clear inputs
+      for(let i=0;i<15;i++) nameInputs[i].value="";
+      inHW.value="";
+      clearErrors();
+      showToast("Saved "+newRecs.length+" defaulter(s).");
+
+      renderView();
+    };
+
+    // initial datalist
+    renderDatalists(String(inClass.value||"").trim());
   }
 
-  function clearClassRoster(c) {
-    const ok = window.confirm("Clear roster for class " + c + "?");
-    if (!ok) return;
-    setRoster((prev) => prev.filter((e) => norm(e.className) !== norm(c)));
-  }
+  function recordCard(r){
+    const wrap = document.createElement("div");
+    wrap.className = "record";
 
-  function removeRosterName(c, n) {
-    const ok = window.confirm("Remove " + n + " from " + c + "?");
-    if (!ok) return;
-    setRoster((prev) =>
-      prev.filter((e) => !(norm(e.className) === norm(c) && norm(e.studentName) === norm(n)))
-    );
-  }
+    const meta = r.status===STATUS.OWED ? "OWED" : (r.status===STATUS.SUB ? "SUBMITTED" : "LOST");
 
-  // owed-only filtered lists
-  function owedOnly(fn) {
-    return records.filter((r) => r.status === STATUS.OWED && fn(r));
-  }
-
-  const listByStudent = useMemo(() => {
-    const q = norm(studentFilter);
-    if (!q) return [];
-    return owedOnly((r) => norm(r.studentName).includes(q));
-  }, [records, studentFilter]);
-
-  const listByHW = useMemo(() => {
-    const q = norm(hwFilter);
-    if (!q) return [];
-    return owedOnly((r) => norm(r.homework).includes(q));
-  }, [records, hwFilter]);
-
-  const listByClass = useMemo(() => {
-    const q = norm(classFilter);
-    if (!q) return [];
-    return owedOnly((r) => norm(r.className).includes(q));
-  }, [records, classFilter]);
-
-  function RecordCard(r) {
-    const meta = r.status === STATUS.OWED ? "OWED" : (r.status === STATUS.SUB ? "SUBMITTED" : "LOST");
-    return (
-      <div key={r.id} style={S.card}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-          <button
-            type="button"
-            onClick={() => openMessage(r.studentName)}
-            style={{ border: 0, background: "transparent", textAlign: "left", padding: 0, cursor: "pointer" }}
-          >
-            <div style={{ fontWeight: 900 }}>
-              {r.studentName} <span style={{ color: "#64748B" }}>({r.className})</span>
-            </div>
-            <div style={{ fontSize: 12, color: "#2563EB", fontWeight: 900 }}>
-              Tap name to generate message
-            </div>
+    wrap.innerHTML = `
+      <div class="record-top">
+        <div>
+          <button class="namebtn" type="button" title="Tap name to generate message">
+            <div class="name"></div>
+            <div class="tap">Tap name to generate message</div>
           </button>
-          <div style={{ fontWeight: 900, fontSize: 12 }}>{meta}</div>
+          <div style="margin-top:8px"><b>HW:</b> <span class="hw"></span></div>
+          <div class="muted" style="font-size:12px;margin-top:2px">Due: <span class="due"></span></div>
         </div>
-
-        <div style={{ marginTop: 8 }}>
-          <div><b>HW:</b> {r.homework}</div>
-          <div style={{ color: "#64748B", fontSize: 12, marginTop: 2 }}>Due: {fmtDDMMMYY(r.dueDate)}</div>
-        </div>
-
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
-          {r.status === STATUS.OWED ? (
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <button type="button" onClick={() => setStatus(r.id, STATUS.SUB)} style={{ ...S.btn, background: "#16A34A", color: "white" }}>
-                Submit
-              </button>
-              <button type="button" onClick={() => setStatus(r.id, STATUS.LOST)} style={{ ...S.btn, background: "#DC2626", color: "white" }}>
-                Lost
-              </button>
-            </div>
-          ) : (
-            <button type="button" onClick={() => setStatus(r.id, STATUS.OWED)} style={{ ...S.btn, background: "#0F172A", color: "white" }}>
-              Mark Owed
-            </button>
-          )}
-        </div>
+        <div class="meta"></div>
       </div>
-    );
+      <div class="actions"></div>
+    `;
+
+    wrap.querySelector(".name").textContent = r.studentName + " (" + r.className + ")";
+    wrap.querySelector(".hw").textContent = r.homework;
+    wrap.querySelector(".due").textContent = fmtDDMMMYY(r.dueDate);
+    wrap.querySelector(".meta").textContent = meta;
+
+    // click name -> message
+    wrap.querySelector(".namebtn").onclick = ()=>{
+      const owedRows = records
+        .filter(x => x.status===STATUS.OWED && norm(x.studentName)===norm(r.studentName))
+        .map(x => ({ homework: x.homework, dueDate: x.dueDate }));
+
+      if(!owedRows.length){
+        showToast("No owed homework for this student.");
+        return;
+      }
+
+      const msg = buildParentMessage(r.studentName, owedRows);
+      openModal("Message to parents - " + r.studentName, msg);
+    };
+
+    const actions = wrap.querySelector(".actions");
+
+    if(r.status===STATUS.OWED){
+      const b1 = document.createElement("button");
+      b1.className="btn btn-green";
+      b1.textContent="Submit";
+      b1.onclick=()=>{
+        records = records.map(x => x.id===r.id ? ({...x, status: STATUS.SUB}) : x);
+        save(); renderView();
+      };
+
+      const b2 = document.createElement("button");
+      b2.className="btn btn-red";
+      b2.textContent="Lost";
+      b2.onclick=()=>{
+        records = records.map(x => x.id===r.id ? ({...x, status: STATUS.LOST}) : x);
+        save(); renderView();
+      };
+
+      actions.appendChild(b1);
+      actions.appendChild(b2);
+    }else{
+      const b = document.createElement("button");
+      b.className="btn btn-dark";
+      b.textContent="Mark Owed";
+      b.onclick=()=>{
+        records = records.map(x => x.id===r.id ? ({...x, status: STATUS.OWED}) : x);
+        save(); renderView();
+      };
+      actions.appendChild(b);
+    }
+
+    return wrap;
   }
 
-  const tabs = [
-    { k: "add", t: "Add" },
-    { k: "student", t: "By Student" },
-    { k: "homework", t: "By HW" },
-    { k: "class", t: "By Class" },
-    { k: "students", t: "Students" },
-    { k: "all", t: "All" },
-  ];
+  function renderFilter(mode){
+    viewEl.innerHTML = "";
 
-  return (
-    <div style={S.page}>
-      <div style={S.shell}>
-        <div style={S.header}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-            <div>
-              <div style={{ fontSize: 18, fontWeight: 900 }}>Homework Tracker</div>
-              <div style={{ fontSize: 12, opacity: 0.95 }}>Tap a student name to generate parent message.</div>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
-              <button
-                type="button"
-                onClick={doResetHomework}
-                style={{ ...S.btn, background: armHW ? "rgba(239,68,68,0.25)" : "rgba(255,255,255,0.18)", color: "white", border: "1px solid rgba(255,255,255,0.35)" }}
-              >
-                {armHW ? "Tap again: Reset HW" : "Reset Homework"}
-              </button>
-              <button
-                type="button"
-                onClick={doResetRoster}
-                style={{ ...S.btn, background: armRoster ? "rgba(239,68,68,0.25)" : "rgba(255,255,255,0.18)", color: "white", border: "1px solid rgba(255,255,255,0.35)" }}
-              >
-                {armRoster ? "Tap again: Reset Roster" : "Reset Roster"}
-              </button>
-            </div>
-          </div>
+    const card = document.createElement("div");
+    card.className="card";
+    card.innerHTML = `
+      <div class="section-title"></div>
+      <input id="q" placeholder="" />
+      <div class="hint">Shows OWED only.</div>
+      <div id="list"></div>
+    `;
+    viewEl.appendChild(card);
 
-          <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <div style={S.pill}>Owed: {owedCount}</div>
-            <div style={S.pill}>Submitted: {subCount}</div>
-            <div style={S.pill}>Lost: {lostCount}</div>
-            <div style={S.pill}>Classes: {classOptions.length}</div>
-          </div>
-        </div>
+    const title = card.querySelector(".section-title");
+    const q = card.querySelector("#q");
+    const list = card.querySelector("#list");
 
-        <div style={S.tabs}>
-          {tabs.map((x) => {
-            const active = tab === x.k;
-            return (
-              <button
-                key={x.k}
-                type="button"
-                onClick={() => setTab(x.k)}
-                style={{ ...S.tabBtn, background: active ? "#2563EB" : "#EEF2FF", color: active ? "white" : "#0F172A" }}
-              >
-                {x.t}
-              </button>
-            );
-          })}
-        </div>
+    if(mode==="student"){
+      title.textContent="Find owed homework by student";
+      q.placeholder="Type student name...";
+    }else if(mode==="homework"){
+      title.textContent="Find students owing a homework";
+      q.placeholder="Type homework...";
+    }else{
+      title.textContent="Find owed homework by class";
+      q.placeholder="Type class...";
+    }
 
-        <datalist id="class-roster">
-          {classOptions.map((c) => <option key={c} value={c} />)}
-        </datalist>
+    function renderList(){
+      const query = norm(q.value);
+      list.innerHTML = "";
+      if(!query) return;
 
-        <datalist id="student-roster">
-          {suggestions.map((n) => <option key={n} value={n} />)}
-        </datalist>
+      const filtered = records.filter(r=>{
+        if(r.status!==STATUS.OWED) return false;
+        if(mode==="student") return norm(r.studentName).includes(query);
+        if(mode==="homework") return norm(r.homework).includes(query);
+        return norm(r.className).includes(query);
+      });
 
-        {tab === "add" ? (
-          <div style={S.card}>
-            <div style={{ fontWeight: 900, marginBottom: 8 }}>Add defaulters (up to 15)</div>
+      filtered.forEach(r => list.appendChild(recordCard(r)));
+    }
 
-            <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} style={S.input} />
-            <div style={S.hint}>This date is the due date.</div>
+    q.addEventListener("input", renderList);
+  }
 
-            <div style={{ height: 10 }} />
-            <input list="class-roster" placeholder="Class (e.g., 4C)" value={klass} onChange={(e) => setKlass(e.target.value)} style={S.input} />
+  function renderStudents(){
+    viewEl.innerHTML = "";
 
-            <div style={{ height: 10 }} />
-            <input placeholder="Homework name" value={homework} onChange={(e) => setHomework(e.target.value)} style={S.input} />
+    const card = document.createElement("div");
+    card.className="card";
+    card.innerHTML = `
+      <div class="section-title">Roster by class</div>
+      <div class="hint">Type a class, paste names (one per line), then save.</div>
+      <div style="height:10px"></div>
+      <input id="rc" placeholder="Class (e.g., 4C)" />
+      <div style="height:10px"></div>
+      <textarea id="rt" placeholder="Paste names (one per line)"></textarea>
+      <div style="height:10px"></div>
+      <button id="saveRoster" class="primary">Save roster for this class</button>
 
-            <div style={S.hint}>Suggestions will show ONLY for this class.</div>
+      <div style="height:14px"></div>
+      <div class="section-title">Current rosters</div>
+      <div id="rosters"></div>
+    `;
+    viewEl.appendChild(card);
 
-            <div style={{ height: 10 }} />
-            <div style={{ display: "grid", gap: 8 }}>
-              {names.map((v, idx) => {
-                const err = nameErrors[idx];
-                return (
-                  <div key={idx}>
-                    <input
-                      list="student-roster"
-                      placeholder="Student Name"
-                      value={v}
-                      onChange={(e) => {
-                        const next = [...names];
-                        next[idx] = e.target.value;
-                        setNames(next);
-                        setNameErrors((prev) => {
-                          if (!prev[idx]) return prev;
-                          const cp = { ...prev };
-                          delete cp[idx];
-                          return cp;
-                        });
-                      }}
-                      style={{
-                        ...S.input,
-                        borderColor: err ? "#FCA5A5" : "#e5e7eb",
-                        background: err ? "#FFF5F5" : "white",
-                      }}
-                    />
-                    {err ? <div style={{ fontSize: 12, color: "#DC2626", marginTop: 4 }}>{err}</div> : null}
-                  </div>
-                );
-              })}
-            </div>
+    const rc = card.querySelector("#rc");
+    const rt = card.querySelector("#rt");
+    const saveRosterBtn = card.querySelector("#saveRoster");
+    const rostersDiv = card.querySelector("#rosters");
 
-            <div style={{ height: 12 }} />
-            <button type="button" onClick={saveDefaulters} style={S.primary}>Save defaulters</button>
-          </div>
-        ) : null}
+    saveRosterBtn.onclick = ()=>{
+      const c = String(rc.value||"").trim();
+      if(!c){ showToast("Enter class first (e.g., 4C)."); return; }
 
-        {tab === "student" ? (
-          <div style={S.card}>
-            <div style={{ fontWeight: 900, marginBottom: 8 }}>Find owed homework by student</div>
-            <input value={studentFilter} onChange={(e) => setStudentFilter(e.target.value)} placeholder="Type student name..." style={S.input} />
-            <div style={S.hint}>Shows OWED only.</div>
-            {listByStudent.map(RecordCard)}
-          </div>
-        ) : null}
+      const list = splitLines(rt.value);
+      if(!list.length){ showToast("Paste at least 1 name."); return; }
 
-        {tab === "homework" ? (
-          <div style={S.card}>
-            <div style={{ fontWeight: 900, marginBottom: 8 }}>Find students owing a homework</div>
-            <input value={hwFilter} onChange={(e) => setHwFilter(e.target.value)} placeholder="Type homework..." style={S.input} />
-            <div style={S.hint}>Shows OWED only.</div>
-            {listByHW.map(RecordCard)}
-          </div>
-        ) : null}
+      const existing = new Set(roster.map(e => norm(e.className)+"|"+norm(e.studentName)));
+      const adds = [];
+      uniqCI(list).forEach(n=>{
+        const key = norm(c)+"|"+norm(n);
+        if(!existing.has(key)){
+          existing.add(key);
+          adds.push({ className:c, studentName:n });
+        }
+      });
 
-        {tab === "class" ? (
-          <div style={S.card}>
-            <div style={{ fontWeight: 900, marginBottom: 8 }}>Find owed homework by class</div>
-            <input value={classFilter} onChange={(e) => setClassFilter(e.target.value)} placeholder="Type class..." style={S.input} />
-            <div style={S.hint}>Shows OWED only.</div>
-            {listByClass.map(RecordCard)}
-          </div>
-        ) : null}
+      roster = roster.concat(adds).sort((a,b)=>{
+        const ac = norm(a.className).localeCompare(norm(b.className));
+        if(ac!==0) return ac;
+        return norm(a.studentName).localeCompare(norm(b.studentName));
+      });
 
-        {tab === "students" ? (
-          <div style={S.card}>
-            <div style={{ fontWeight: 900, marginBottom: 8 }}>Roster by class</div>
-            <input value={rosterClass} onChange={(e) => setRosterClass(e.target.value)} placeholder="Class (e.g., 4C)" style={S.input} />
-            <div style={{ height: 10 }} />
-            <textarea value={rosterText} onChange={(e) => setRosterText(e.target.value)} style={S.textarea} placeholder="Paste names (one per line)" />
-            <div style={{ height: 10 }} />
-            <button type="button" onClick={saveRosterForClass} style={S.primary}>Save roster for this class</button>
+      rt.value = "";
+      save();
+      showToast("Saved roster for " + c + ".");
+      renderView();
+    };
 
-            <div style={{ height: 12 }} />
-            <div style={{ fontWeight: 900, marginBottom: 8 }}>Current rosters</div>
-            {classOptions.length === 0 ? (
-              <div style={{ color: "#64748B" }}>No rosters yet.</div>
-            ) : (
-              <div style={{ display: "grid", gap: 12 }}>
-                {classOptions.map((c) => (
-                  <div key={c} style={{ border: "1px solid #e5e7eb", borderRadius: 14, padding: 10 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-                      <div style={{ fontWeight: 900 }}>{c}</div>
-                      <button type="button" onClick={() => clearClassRoster(c)} style={{ ...S.btn, background: "#DC2626", color: "white" }}>
-                        Clear class
-                      </button>
-                    </div>
-                    <div style={{ height: 8 }} />
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                      {(rosterByClass.get(c) || []).map((n) => (
-                        <button key={c + "|" + n} type="button" onClick={() => removeRosterName(c, n)} style={S.chip}>
-                          {n}
-                        </button>
-                      ))}
-                    </div>
-                    <div style={S.hint}>Tap a name to remove.</div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        ) : null}
+    const map = rosterByClass();
+    const classes = classOptions();
 
-        {tab === "all" ? (
-          <div style={S.card}>
-            <div style={{ fontWeight: 900, marginBottom: 8 }}>All records</div>
-            <div style={S.hint}>Includes Submitted/Lost too.</div>
-            {records.map(RecordCard)}
-          </div>
-        ) : null}
+    if(classes.length===0){
+      rostersDiv.innerHTML = `<div class="muted">No rosters yet.</div>`;
+      return;
+    }
 
-        <div style={{ height: 20 }} />
-      </div>
+    classes.forEach(c=>{
+      const box = document.createElement("div");
+      box.style.border = "1px solid #e5e7eb";
+      box.style.borderRadius = "14px";
+      box.style.padding = "10px";
+      box.style.marginTop = "10px";
 
-      {toast ? (
-        <div style={{ position: "fixed", left: 0, right: 0, bottom: 18, display: "flex", justifyContent: "center", padding: "0 16px", zIndex: 60 }}>
-          <div style={{ maxWidth: 600, width: "100%", background: "rgba(15,23,42,0.92)", color: "white", borderRadius: 16, padding: "12px 14px", fontWeight: 900, textAlign: "center" }}>
-            {toast}
-          </div>
-        </div>
-      ) : null}
+      const top = document.createElement("div");
+      top.style.display="flex";
+      top.style.justifyContent="space-between";
+      top.style.gap="10px";
+      top.style.alignItems="center";
 
-      {msgOpen ? (
-        <Modal title={msgTitle} onClose={() => setMsgOpen(false)}>
-          <div style={{ fontSize: 12, color: "#64748B", fontWeight: 900 }}>You can edit before sending.</div>
-          <div style={{ height: 8 }} />
-          <textarea value={msgText} onChange={(e) => setMsgText(e.target.value)} style={{ ...S.textarea, minHeight: 220 }} />
-          <div style={{ height: 10 }} />
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <button
-              type="button"
-              onClick={async () => showToast((await copyText(msgText)) ? "Copied." : "Copy failed.")}
-              style={{ flex: "1 1 auto", border: 0, borderRadius: 12, padding: "12px 12px", fontWeight: 900, color: "white", background: "#16A34A" }}
-            >
-              Copy text
-            </button>
-            <button
-              type="button"
-              onClick={() => setMsgOpen(false)}
-              style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: "12px 12px", fontWeight: 900, background: "white" }}
-            >
-              Done
-            </button>
-          </div>
-        </Modal>
-      ) : null}
-    </div>
-  );
-}
+      const left = document.createElement("div");
+      left.style.fontWeight="900";
+      left.textContent = c;
+
+      const clearBtn = document.createElement("button");
+      clearBtn.className="btn btn-red";
+      clearBtn.textContent="Clear class";
+      clearBtn.onclick=()=>{
+        const ok = window.confirm("Clear roster for class " + c + "?");
+        if(!ok) return;
+        roster = roster.filter(e => norm(e.className)!==norm(c));
+        save();
+        showToast("Cleared roster for " + c + ".");
+        renderView();
+      };
+
+      top.appendChild(left);
+      top.appendChild(clearBtn);
+
+      const chips = document.createElement("div");
+      chips.style.display="flex";
+      chips.style.flexWrap="wrap";
+      chips.style.gap="8px";
+      chips.style.marginTop="8px";
+
+      (map.get(c) || []).forEach(n=>{
+        const chip = document.createElement("button");
+        chip.className="chip";
+        chip.textContent = n;
+        chip.onclick=()=>{
+          const ok = window.confirm("Remove " + n + " from " + c + "?");
+          if(!ok) return;
+          roster = roster.filter(e => !(norm(e.className)===norm(c) && norm(e.studentName)===norm(n)));
+          save();
+          renderView();
+        };
+        chips.appendChild(chip);
+      });
+
+      const note = document.createElement("div");
+      note.className="hint";
+      note.textContent="Tap a name to remove.";
+
+      box.appendChild(top);
+      box.appendChild(chips);
+      box.appendChild(note);
+      rostersDiv.appendChild(box);
+    });
+  }
+
+  function renderAll(){
+    viewEl.innerHTML = "";
+    const card = document.createElement("div");
+    card.className="card";
+    card.innerHTML = `
+      <div class="section-title">All records</div>
+      <div class="hint">Includes Submitted/Lost too.</div>
+      <div id="list"></div>
+    `;
+    viewEl.appendChild(card);
+    const list = card.querySelector("#list");
+    records.forEach(r => list.appendChild(recordCard(r)));
+    if(records.length===0){
+      const empty = document.createElement("div");
+      empty.className="muted";
+      empty.style.marginTop="8px";
+      empty.textContent="No records yet.";
+      list.appendChild(empty);
+    }
+  }
+
+  // Reset buttons
+  document.getElementById("btnResetHW").onclick = ()=>{
+    if(!armHW){
+      armHW = true;
+      document.getElementById("btnResetHW").textContent = "Tap again: Reset HW";
+      clearTimeout(armHWTimer);
+      armHWTimer = setTimeout(()=>{
+        armHW=false;
+        document.getElementById("btnResetHW").textContent = "Reset Homework";
+      }, 3500);
+      return;
+    }
+    const ok = window.confirm("Reset ALL homework records? Roster stays.");
+    armHW = false;
+    document.getElementById("btnResetHW").textContent = "Reset Homework";
+    if(!ok) return;
+    records = [];
+    save();
+    showToast("Homework records reset.");
+    renderView();
+  };
+
+  document.getElementById("btnResetRoster").onclick = ()=>{
+    if(!armRoster){
+      armRoster = true;
+      document.getElementById("btnResetRoster").textContent = "Tap again: Reset Roster";
+      clearTimeout(armRosterTimer);
+      armRosterTimer = setTimeout(()=>{
+        armRoster=false;
+        document.getElementById("btnResetRoster").textContent = "Reset Roster";
+      }, 3500);
+      return;
+    }
+    const ok = window.confirm("Reset ALL roster entries? Homework stays.");
+    armRoster = false;
+    document.getElementById("btnResetRoster").textContent = "Reset Roster";
+    if(!ok) return;
+    roster = [];
+    save();
+    showToast("Roster reset.");
+    renderView();
+  };
+
+  // Boot
+  load();
+  renderTabs();
+  renderView();
+})();
+</script>
+</body>
+</html>
