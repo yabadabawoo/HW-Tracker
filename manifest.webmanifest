@@ -1,7 +1,8 @@
 {
   "name": "Homework Tracker",
   "short_name": "HW Tracker",
-  "start_url": "./",
+  "start_url": "/HW-Tracker/",
+"scope": "/HW-Tracker/",
   "display": "standalone",
   "background_color": "#f8fafc",
   "theme_color": "#2563eb"
