@@ -4,6 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <title>Homework Tracker</title>
+  <link rel="manifest" href="./manifest.webmanifest">
+<meta name="theme-color" content="#2563eb">
   <style>
     :root{
       --bg:#f8fafc;
@@ -944,6 +946,13 @@
   renderTabs();
   renderView();
 })();
+</script>
+  <script>
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", function () {
+      navigator.serviceWorker.register("./sw.js");
+    });
+  }
 </script>
 </body>
 </html>
