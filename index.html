@@ -1,0 +1,697 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+
+const KEY_REC = "hw_v10_records";
+const KEY_ROS = "hw_v10_roster";
+
+const STATUS = { OWED: "owed", SUB: "submitted", LOST: "lost" };
+
+function norm(s) {
+  return String(s || "").trim().toLowerCase();
+}
+function todayISO() {
+  return new Date().toISOString().slice(0, 10);
+}
+function uid() {
+  return Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 9);
+}
+function parseTime(iso) {
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? t : Number.POSITIVE_INFINITY;
+}
+function fmtDDMMMYY(iso) {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  const day = String(d.getDate()).padStart(2, "0");
+  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  return day + "-" + months[d.getMonth()] + "-" + String(d.getFullYear()).slice(-2);
+}
+function uniqCI(list) {
+  const seen = new Set();
+  const out = [];
+  for (const x of list) {
+    const v = String(x || "").trim();
+    if (!v) continue;
+    const k = norm(v);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(v);
+  }
+  return out;
+}
+function splitLines(text) {
+  return String(text || "")
+    .replaceAll("\r", "")
+    .split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function buildParentMessage(studentName, owedRows) {
+  const rows = [...owedRows].sort((a, b) => {
+    const ta = parseTime(a.dueDate);
+    const tb = parseTime(b.dueDate);
+    if (ta !== tb) return ta - tb;
+    return norm(a.homework).localeCompare(norm(b.homework));
+  });
+
+  const lines = [];
+  lines.push("Hi,");
+  lines.push("");
+  lines.push("Your child " + studentName + " has not submitted the following homework:");
+  lines.push("");
+  for (let i = 0; i < rows.length; i++) {
+    lines.push(String(i + 1) + ". " + fmtDDMMMYY(rows[i].dueDate) + " - " + rows[i].homework);
+  }
+  lines.push("");
+  lines.push("Please help to ensure that your child completed and submits the homework on time.");
+  lines.push("");
+  lines.push("Thank you.");
+  return lines.join("\n");
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (e) {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      const ok = document.execCommand("copy");
+      ta.remove();
+      return ok;
+    } catch (e2) {
+      return false;
+    }
+  }
+}
+
+function Modal(props) {
+  return (
+    <div
+      onClick={props.onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.5)",
+        display: "flex",
+        justifyContent: "center",
+        alignItems: "flex-end",
+        padding: 14,
+        zIndex: 50,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "100%",
+          maxWidth: 600,
+          background: "white",
+          borderRadius: 16,
+          border: "1px solid #e5e7eb",
+          padding: 12,
+          maxHeight: "80vh",
+          overflow: "auto",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+          <div style={{ fontWeight: 900 }}>{props.title}</div>
+          <button
+            type="button"
+            onClick={props.onClose}
+            style={{
+              borderRadius: 12,
+              border: "1px solid #e5e7eb",
+              background: "#f8fafc",
+              padding: "6px 10px",
+              fontWeight: 900,
+            }}
+          >
+            Close
+          </button>
+        </div>
+        <div style={{ height: 10 }} />
+        {props.children}
+      </div>
+    </div>
+  );
+}
+
+const S = {
+  page: { minHeight: "100vh", padding: 14, background: "#f8fafc", fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial" },
+  shell: { maxWidth: 600, margin: "0 auto" },
+  header: { borderRadius: 16, padding: 14, color: "white", background: "linear-gradient(135deg,#6D28D9 0%,#2563EB 60%,#06B6D4 100%)" },
+  row: { display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" },
+  pill: { background: "rgba(255,255,255,0.18)", border: "1px solid rgba(255,255,255,0.25)", padding: "6px 10px", borderRadius: 999, fontSize: 12, fontWeight: 900 },
+  tabs: { display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 8, marginTop: 12 },
+  tabBtn: { border: 0, borderRadius: 12, padding: "10px 6px", fontWeight: 900, fontSize: 12 },
+  card: { marginTop: 10, background: "white", borderRadius: 16, border: "1px solid #e5e7eb", padding: 12 },
+  input: { width: "100%", padding: "10px 12px", borderRadius: 12, border: "1px solid #e5e7eb", fontSize: 14, boxSizing: "border-box" },
+  textarea: { width: "100%", minHeight: 120, padding: "10px 12px", borderRadius: 12, border: "1px solid #e5e7eb", fontSize: 14, boxSizing: "border-box", resize: "vertical" },
+  hint: { fontSize: 12, color: "#64748B", marginTop: 6 },
+  primary: { width: "100%", border: 0, borderRadius: 12, padding: "12px 12px", fontWeight: 900, color: "white", background: "#2563EB" },
+  btn: { border: 0, borderRadius: 10, padding: "8px 10px", fontWeight: 900, cursor: "pointer" },
+};
+
+export default function App() {
+  const [tab, setTab] = useState("add");
+
+  const [records, setRecords] = useState([]);
+  const [roster, setRoster] = useState([]);
+
+  const [dueDate, setDueDate] = useState(todayISO());
+  const [klass, setKlass] = useState("");
+  const [homework, setHomework] = useState("");
+  const [names, setNames] = useState(Array.from({ length: 15 }, () => ""));
+  const [nameErrors, setNameErrors] = useState({});
+
+  const [rosterClass, setRosterClass] = useState("");
+  const [rosterText, setRosterText] = useState("");
+
+  const [studentFilter, setStudentFilter] = useState("");
+  const [hwFilter, setHwFilter] = useState("");
+  const [classFilter, setClassFilter] = useState("");
+
+  const [toast, setToast] = useState(null);
+  const toastTimer = useRef(null);
+
+  const [armHW, setArmHW] = useState(false);
+  const [armRoster, setArmRoster] = useState(false);
+  const armHWTimer = useRef(null);
+  const armRosterTimer = useRef(null);
+
+  const [msgOpen, setMsgOpen] = useState(false);
+  const [msgTitle, setMsgTitle] = useState("");
+  const [msgText, setMsgText] = useState("");
+
+  function showToast(t) {
+    setToast(t);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 2400);
+  }
+
+  useEffect(() => {
+    try {
+      const a = JSON.parse(localStorage.getItem(KEY_REC) || "[]");
+      if (Array.isArray(a)) setRecords(a);
+    } catch (e) {}
+    try {
+      const b = JSON.parse(localStorage.getItem(KEY_ROS) || "[]");
+      if (Array.isArray(b)) setRoster(b);
+    } catch (e2) {}
+  }, []);
+
+  useEffect(() => {
+    try { localStorage.setItem(KEY_REC, JSON.stringify(records)); } catch (e) {}
+  }, [records]);
+
+  useEffect(() => {
+    try { localStorage.setItem(KEY_ROS, JSON.stringify(roster)); } catch (e) {}
+  }, [roster]);
+
+  useEffect(() => {
+    if (!armHW) return;
+    if (armHWTimer.current) clearTimeout(armHWTimer.current);
+    armHWTimer.current = setTimeout(() => setArmHW(false), 3500);
+  }, [armHW]);
+
+  useEffect(() => {
+    if (!armRoster) return;
+    if (armRosterTimer.current) clearTimeout(armRosterTimer.current);
+    armRosterTimer.current = setTimeout(() => setArmRoster(false), 3500);
+  }, [armRoster]);
+
+  const rosterByClass = useMemo(() => {
+    const m = new Map();
+    for (const e of roster) {
+      const c = String(e.className || "").trim();
+      const n = String(e.studentName || "").trim();
+      if (!c || !n) continue;
+      if (!m.has(c)) m.set(c, []);
+      m.get(c).push(n);
+    }
+    for (const [c, arr] of m.entries()) {
+      m.set(c, uniqCI(arr).sort((a, b) => norm(a).localeCompare(norm(b))));
+    }
+    return m;
+  }, [roster]);
+
+  const classOptions = useMemo(() => {
+    const s = new Set();
+    for (const e of roster) {
+      const c = String(e.className || "").trim();
+      if (c) s.add(c);
+    }
+    return Array.from(s).sort((a, b) => norm(a).localeCompare(norm(b)));
+  }, [roster]);
+
+  const suggestions = useMemo(() => {
+    const c = String(klass || "").trim();
+    if (!c || !rosterByClass.has(c)) return [];
+    return rosterByClass.get(c);
+  }, [klass, rosterByClass]);
+
+  const matchMap = useMemo(() => {
+    const c = String(klass || "").trim();
+    const m = new Map();
+    if (!c || !rosterByClass.has(c)) return m;
+    const list = rosterByClass.get(c);
+    for (let i = 0; i < list.length; i++) m.set(norm(list[i]), list[i]);
+    return m;
+  }, [klass, rosterByClass]);
+
+  const owedCount = useMemo(() => records.filter((r) => r.status === STATUS.OWED).length, [records]);
+  const subCount = useMemo(() => records.filter((r) => r.status === STATUS.SUB).length, [records]);
+  const lostCount = useMemo(() => records.filter((r) => r.status === STATUS.LOST).length, [records]);
+
+  function doResetHomework() {
+    if (!armHW) { setArmHW(true); return; }
+    const ok = window.confirm("Reset ALL homework records? Roster stays.");
+    if (!ok) { setArmHW(false); return; }
+    setRecords([]);
+    setNames(Array.from({ length: 15 }, () => ""));
+    setNameErrors({});
+    setArmHW(false);
+    showToast("Homework records reset.");
+  }
+
+  function doResetRoster() {
+    if (!armRoster) { setArmRoster(true); return; }
+    const ok = window.confirm("Reset ALL roster entries? Homework stays.");
+    if (!ok) { setArmRoster(false); return; }
+    setRoster([]);
+    setRosterClass("");
+    setRosterText("");
+    setArmRoster(false);
+    showToast("Roster reset.");
+  }
+
+  function saveDefaulters() {
+    const c = String(klass || "").trim();
+    const h = String(homework || "").trim();
+    if (!dueDate || !c || !h) { showToast("Fill Due Date, Class, Homework."); return; }
+    if (!rosterByClass.has(c)) { showToast("No roster for class " + c + ". Add it in Students tab."); return; }
+
+    const provided = [];
+    for (let i = 0; i < names.length; i++) {
+      const v = String(names[i] || "").trim();
+      if (v) provided.push({ v, idx: i });
+    }
+    if (provided.length === 0) { showToast("Enter at least 1 student name."); return; }
+
+    const errors = {};
+    const matched = [];
+    for (let i = 0; i < provided.length; i++) {
+      const it = provided[i];
+      const canonical = matchMap.get(norm(it.v));
+      if (!canonical) errors[it.idx] = "Not in class roster.";
+      else matched.push(canonical);
+    }
+    if (Object.keys(errors).length) {
+      setNameErrors(errors);
+      showToast("Unmatched names: " + Object.keys(errors).length);
+      return;
+    }
+
+    const unique = uniqCI(matched);
+    const newRecs = unique.map((studentName) => ({
+      id: uid(),
+      dueDate,
+      className: c,
+      studentName,
+      homework: h,
+      status: STATUS.OWED,
+    }));
+
+    setRecords((prev) => [...newRecs, ...prev]);
+    setNames(Array.from({ length: 15 }, () => ""));
+    setHomework("");
+    setNameErrors({});
+    showToast("Saved " + newRecs.length + " defaulter(s).");
+  }
+
+  function setStatus(id, status) {
+    setRecords((prev) => prev.map((r) => (r.id === id ? { ...r, status } : r)));
+  }
+
+  function openMessage(studentName) {
+    const owed = records
+      .filter((r) => r.status === STATUS.OWED && norm(r.studentName) === norm(studentName))
+      .map((r) => ({ homework: r.homework, dueDate: r.dueDate }));
+    if (!owed.length) { showToast("No owed homework for this student."); return; }
+
+    setMsgTitle("Message to parents - " + studentName);
+    setMsgText(buildParentMessage(studentName, owed));
+    setMsgOpen(true);
+  }
+
+  function saveRosterForClass() {
+    const c = String(rosterClass || "").trim();
+    if (!c) { showToast("Enter class first (e.g., 4C)."); return; }
+    const list = splitLines(rosterText);
+    if (!list.length) { showToast("Paste at least 1 name."); return; }
+
+    const existing = new Set(roster.map((e) => norm(e.className) + "|" + norm(e.studentName)));
+    const adds = [];
+    const uniq = uniqCI(list);
+    for (let i = 0; i < uniq.length; i++) {
+      const n = uniq[i];
+      const key = norm(c) + "|" + norm(n);
+      if (!existing.has(key)) {
+        existing.add(key);
+        adds.push({ className: c, studentName: n });
+      }
+    }
+
+    const merged = [...roster, ...adds].sort((a, b) => {
+      const ac = norm(a.className).localeCompare(norm(b.className));
+      if (ac !== 0) return ac;
+      return norm(a.studentName).localeCompare(norm(b.studentName));
+    });
+
+    setRoster(merged);
+    setRosterText("");
+    showToast("Saved roster for " + c + ".");
+  }
+
+  function clearClassRoster(c) {
+    const ok = window.confirm("Clear roster for class " + c + "?");
+    if (!ok) return;
+    setRoster((prev) => prev.filter((e) => norm(e.className) !== norm(c)));
+  }
+
+  function removeRosterName(c, n) {
+    const ok = window.confirm("Remove " + n + " from " + c + "?");
+    if (!ok) return;
+    setRoster((prev) =>
+      prev.filter((e) => !(norm(e.className) === norm(c) && norm(e.studentName) === norm(n)))
+    );
+  }
+
+  // owed-only filtered lists
+  function owedOnly(fn) {
+    return records.filter((r) => r.status === STATUS.OWED && fn(r));
+  }
+
+  const listByStudent = useMemo(() => {
+    const q = norm(studentFilter);
+    if (!q) return [];
+    return owedOnly((r) => norm(r.studentName).includes(q));
+  }, [records, studentFilter]);
+
+  const listByHW = useMemo(() => {
+    const q = norm(hwFilter);
+    if (!q) return [];
+    return owedOnly((r) => norm(r.homework).includes(q));
+  }, [records, hwFilter]);
+
+  const listByClass = useMemo(() => {
+    const q = norm(classFilter);
+    if (!q) return [];
+    return owedOnly((r) => norm(r.className).includes(q));
+  }, [records, classFilter]);
+
+  function RecordCard(r) {
+    const meta = r.status === STATUS.OWED ? "OWED" : (r.status === STATUS.SUB ? "SUBMITTED" : "LOST");
+    return (
+      <div key={r.id} style={S.card}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+          <button
+            type="button"
+            onClick={() => openMessage(r.studentName)}
+            style={{ border: 0, background: "transparent", textAlign: "left", padding: 0, cursor: "pointer" }}
+          >
+            <div style={{ fontWeight: 900 }}>
+              {r.studentName} <span style={{ color: "#64748B" }}>({r.className})</span>
+            </div>
+            <div style={{ fontSize: 12, color: "#2563EB", fontWeight: 900 }}>
+              Tap name to generate message
+            </div>
+          </button>
+          <div style={{ fontWeight: 900, fontSize: 12 }}>{meta}</div>
+        </div>
+
+        <div style={{ marginTop: 8 }}>
+          <div><b>HW:</b> {r.homework}</div>
+          <div style={{ color: "#64748B", fontSize: 12, marginTop: 2 }}>Due: {fmtDDMMMYY(r.dueDate)}</div>
+        </div>
+
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
+          {r.status === STATUS.OWED ? (
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button type="button" onClick={() => setStatus(r.id, STATUS.SUB)} style={{ ...S.btn, background: "#16A34A", color: "white" }}>
+                Submit
+              </button>
+              <button type="button" onClick={() => setStatus(r.id, STATUS.LOST)} style={{ ...S.btn, background: "#DC2626", color: "white" }}>
+                Lost
+              </button>
+            </div>
+          ) : (
+            <button type="button" onClick={() => setStatus(r.id, STATUS.OWED)} style={{ ...S.btn, background: "#0F172A", color: "white" }}>
+              Mark Owed
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  const tabs = [
+    { k: "add", t: "Add" },
+    { k: "student", t: "By Student" },
+    { k: "homework", t: "By HW" },
+    { k: "class", t: "By Class" },
+    { k: "students", t: "Students" },
+    { k: "all", t: "All" },
+  ];
+
+  return (
+    <div style={S.page}>
+      <div style={S.shell}>
+        <div style={S.header}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+            <div>
+              <div style={{ fontSize: 18, fontWeight: 900 }}>Homework Tracker</div>
+              <div style={{ fontSize: 12, opacity: 0.95 }}>Tap a student name to generate parent message.</div>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
+              <button
+                type="button"
+                onClick={doResetHomework}
+                style={{ ...S.btn, background: armHW ? "rgba(239,68,68,0.25)" : "rgba(255,255,255,0.18)", color: "white", border: "1px solid rgba(255,255,255,0.35)" }}
+              >
+                {armHW ? "Tap again: Reset HW" : "Reset Homework"}
+              </button>
+              <button
+                type="button"
+                onClick={doResetRoster}
+                style={{ ...S.btn, background: armRoster ? "rgba(239,68,68,0.25)" : "rgba(255,255,255,0.18)", color: "white", border: "1px solid rgba(255,255,255,0.35)" }}
+              >
+                {armRoster ? "Tap again: Reset Roster" : "Reset Roster"}
+              </button>
+            </div>
+          </div>
+
+          <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <div style={S.pill}>Owed: {owedCount}</div>
+            <div style={S.pill}>Submitted: {subCount}</div>
+            <div style={S.pill}>Lost: {lostCount}</div>
+            <div style={S.pill}>Classes: {classOptions.length}</div>
+          </div>
+        </div>
+
+        <div style={S.tabs}>
+          {tabs.map((x) => {
+            const active = tab === x.k;
+            return (
+              <button
+                key={x.k}
+                type="button"
+                onClick={() => setTab(x.k)}
+                style={{ ...S.tabBtn, background: active ? "#2563EB" : "#EEF2FF", color: active ? "white" : "#0F172A" }}
+              >
+                {x.t}
+              </button>
+            );
+          })}
+        </div>
+
+        <datalist id="class-roster">
+          {classOptions.map((c) => <option key={c} value={c} />)}
+        </datalist>
+
+        <datalist id="student-roster">
+          {suggestions.map((n) => <option key={n} value={n} />)}
+        </datalist>
+
+        {tab === "add" ? (
+          <div style={S.card}>
+            <div style={{ fontWeight: 900, marginBottom: 8 }}>Add defaulters (up to 15)</div>
+
+            <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} style={S.input} />
+            <div style={S.hint}>This date is the due date.</div>
+
+            <div style={{ height: 10 }} />
+            <input list="class-roster" placeholder="Class (e.g., 4C)" value={klass} onChange={(e) => setKlass(e.target.value)} style={S.input} />
+
+            <div style={{ height: 10 }} />
+            <input placeholder="Homework name" value={homework} onChange={(e) => setHomework(e.target.value)} style={S.input} />
+
+            <div style={S.hint}>Suggestions will show ONLY for this class.</div>
+
+            <div style={{ height: 10 }} />
+            <div style={{ display: "grid", gap: 8 }}>
+              {names.map((v, idx) => {
+                const err = nameErrors[idx];
+                return (
+                  <div key={idx}>
+                    <input
+                      list="student-roster"
+                      placeholder="Student Name"
+                      value={v}
+                      onChange={(e) => {
+                        const next = [...names];
+                        next[idx] = e.target.value;
+                        setNames(next);
+                        setNameErrors((prev) => {
+                          if (!prev[idx]) return prev;
+                          const cp = { ...prev };
+                          delete cp[idx];
+                          return cp;
+                        });
+                      }}
+                      style={{
+                        ...S.input,
+                        borderColor: err ? "#FCA5A5" : "#e5e7eb",
+                        background: err ? "#FFF5F5" : "white",
+                      }}
+                    />
+                    {err ? <div style={{ fontSize: 12, color: "#DC2626", marginTop: 4 }}>{err}</div> : null}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div style={{ height: 12 }} />
+            <button type="button" onClick={saveDefaulters} style={S.primary}>Save defaulters</button>
+          </div>
+        ) : null}
+
+        {tab === "student" ? (
+          <div style={S.card}>
+            <div style={{ fontWeight: 900, marginBottom: 8 }}>Find owed homework by student</div>
+            <input value={studentFilter} onChange={(e) => setStudentFilter(e.target.value)} placeholder="Type student name..." style={S.input} />
+            <div style={S.hint}>Shows OWED only.</div>
+            {listByStudent.map(RecordCard)}
+          </div>
+        ) : null}
+
+        {tab === "homework" ? (
+          <div style={S.card}>
+            <div style={{ fontWeight: 900, marginBottom: 8 }}>Find students owing a homework</div>
+            <input value={hwFilter} onChange={(e) => setHwFilter(e.target.value)} placeholder="Type homework..." style={S.input} />
+            <div style={S.hint}>Shows OWED only.</div>
+            {listByHW.map(RecordCard)}
+          </div>
+        ) : null}
+
+        {tab === "class" ? (
+          <div style={S.card}>
+            <div style={{ fontWeight: 900, marginBottom: 8 }}>Find owed homework by class</div>
+            <input value={classFilter} onChange={(e) => setClassFilter(e.target.value)} placeholder="Type class..." style={S.input} />
+            <div style={S.hint}>Shows OWED only.</div>
+            {listByClass.map(RecordCard)}
+          </div>
+        ) : null}
+
+        {tab === "students" ? (
+          <div style={S.card}>
+            <div style={{ fontWeight: 900, marginBottom: 8 }}>Roster by class</div>
+            <input value={rosterClass} onChange={(e) => setRosterClass(e.target.value)} placeholder="Class (e.g., 4C)" style={S.input} />
+            <div style={{ height: 10 }} />
+            <textarea value={rosterText} onChange={(e) => setRosterText(e.target.value)} style={S.textarea} placeholder="Paste names (one per line)" />
+            <div style={{ height: 10 }} />
+            <button type="button" onClick={saveRosterForClass} style={S.primary}>Save roster for this class</button>
+
+            <div style={{ height: 12 }} />
+            <div style={{ fontWeight: 900, marginBottom: 8 }}>Current rosters</div>
+            {classOptions.length === 0 ? (
+              <div style={{ color: "#64748B" }}>No rosters yet.</div>
+            ) : (
+              <div style={{ display: "grid", gap: 12 }}>
+                {classOptions.map((c) => (
+                  <div key={c} style={{ border: "1px solid #e5e7eb", borderRadius: 14, padding: 10 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+                      <div style={{ fontWeight: 900 }}>{c}</div>
+                      <button type="button" onClick={() => clearClassRoster(c)} style={{ ...S.btn, background: "#DC2626", color: "white" }}>
+                        Clear class
+                      </button>
+                    </div>
+                    <div style={{ height: 8 }} />
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                      {(rosterByClass.get(c) || []).map((n) => (
+                        <button key={c + "|" + n} type="button" onClick={() => removeRosterName(c, n)} style={S.chip}>
+                          {n}
+                        </button>
+                      ))}
+                    </div>
+                    <div style={S.hint}>Tap a name to remove.</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : null}
+
+        {tab === "all" ? (
+          <div style={S.card}>
+            <div style={{ fontWeight: 900, marginBottom: 8 }}>All records</div>
+            <div style={S.hint}>Includes Submitted/Lost too.</div>
+            {records.map(RecordCard)}
+          </div>
+        ) : null}
+
+        <div style={{ height: 20 }} />
+      </div>
+
+      {toast ? (
+        <div style={{ position: "fixed", left: 0, right: 0, bottom: 18, display: "flex", justifyContent: "center", padding: "0 16px", zIndex: 60 }}>
+          <div style={{ maxWidth: 600, width: "100%", background: "rgba(15,23,42,0.92)", color: "white", borderRadius: 16, padding: "12px 14px", fontWeight: 900, textAlign: "center" }}>
+            {toast}
+          </div>
+        </div>
+      ) : null}
+
+      {msgOpen ? (
+        <Modal title={msgTitle} onClose={() => setMsgOpen(false)}>
+          <div style={{ fontSize: 12, color: "#64748B", fontWeight: 900 }}>You can edit before sending.</div>
+          <div style={{ height: 8 }} />
+          <textarea value={msgText} onChange={(e) => setMsgText(e.target.value)} style={{ ...S.textarea, minHeight: 220 }} />
+          <div style={{ height: 10 }} />
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={async () => showToast((await copyText(msgText)) ? "Copied." : "Copy failed.")}
+              style={{ flex: "1 1 auto", border: 0, borderRadius: 12, padding: "12px 12px", fontWeight: 900, color: "white", background: "#16A34A" }}
+            >
+              Copy text
+            </button>
+            <button
+              type="button"
+              onClick={() => setMsgOpen(false)}
+              style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: "12px 12px", fontWeight: 900, background: "white" }}
+            >
+              Done
+            </button>
+          </div>
+        </Modal>
+      ) : null}
+    </div>
+  );
+}
