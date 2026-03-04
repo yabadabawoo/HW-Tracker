@@ -775,7 +775,6 @@ function renderFilter(mode){
 
     <div style="display:grid;gap:8px;">
       <input id="q" placeholder="" />
-
       <select id="statusSel" style="width:100%;padding:10px 12px;border-radius:12px;border:1px solid #e5e7eb;font-size:14px;background:#fff;">
         <option value="all">Status: All</option>
         <option value="owed">Status: Owed</option>
@@ -784,7 +783,7 @@ function renderFilter(mode){
       </select>
     </div>
 
-    <div class="hint">Type to search, then choose a status filter.</div>
+    <div class="hint" id="hint"></div>
     <div id="list"></div>
   `;
   viewEl.appendChild(card);
@@ -792,17 +791,26 @@ function renderFilter(mode){
   const title = card.querySelector(".section-title");
   const q = card.querySelector("#q");
   const statusSel = card.querySelector("#statusSel");
+  const hint = card.querySelector("#hint");
   const list = card.querySelector("#list");
 
   if(mode==="student"){
-    title.textContent="Find homework by student";
+    title.textContent="Search by student";
     q.placeholder="Type student name...";
   }else if(mode==="homework"){
-    title.textContent="Find students by homework";
+    title.textContent="Search by homework";
     q.placeholder="Type homework...";
   }else{
-    title.textContent="Find homework by class";
+    title.textContent="Search by class";
     q.placeholder="Type class...";
+  }
+
+  function getStatus(r){
+    const raw = String(r.status || "").trim().toLowerCase();
+    if (raw === "sub" || raw === "submit" || raw === "submitted" || raw === "done") return "submitted";
+    if (raw === "owe" || raw === "owed") return "owed";
+    if (raw === "lost") return "lost";
+    return raw || "owed";
   }
 
   function renderList(){
@@ -810,11 +818,19 @@ function renderFilter(mode){
     const statusMode = String(statusSel.value || "all").trim().toLowerCase();
 
     list.innerHTML = "";
-    if(!query) return;
+
+    if (query) {
+      hint.textContent = "Filtering within matches for: " + query;
+    } else {
+      hint.textContent = "No search text: showing by Status only.";
+    }
 
     const filtered = records.filter(r => {
-      const rStatus = String(r.status || "").trim().toLowerCase();
+      const rStatus = getStatus(r);
       if(statusMode !== "all" && rStatus !== statusMode) return false;
+
+      // If no query, show everything that matches status
+      if(!query) return true;
 
       const sName = String(r.studentName || "").trim().toLowerCase();
       const sHw   = String(r.homework || r.homeworkName || "").trim().toLowerCase();
@@ -825,188 +841,27 @@ function renderFilter(mode){
       return sCls.includes(query);
     });
 
-    filtered.forEach(r => list.appendChild(recordCard(r)));
-
     if(filtered.length === 0){
       const empty = document.createElement("div");
       empty.className="muted";
       empty.style.marginTop="8px";
       empty.textContent="No matches.";
       list.appendChild(empty);
+      return;
     }
+
+    filtered.forEach(r => {
+      try {
+        list.appendChild(recordCard(r));
+      } catch(e) {}
+    });
   }
 
   q.addEventListener("input", renderList);
   statusSel.addEventListener("change", renderList);
-}
 
-  function renderStudents(){
-    viewEl.innerHTML = "";
-
-    const card = document.createElement("div");
-    card.className="card";
-    card.innerHTML = `
-      <div class="section-title">Roster by class</div>
-      <div class="hint">Type a class, paste names (one per line), then save.</div>
-      <div style="height:10px"></div>
-      <input id="rc" placeholder="Class (e.g., 4C)" />
-      <div style="height:10px"></div>
-      <textarea id="rt" placeholder="Paste names (one per line)"></textarea>
-      <div style="height:10px"></div>
-      <button id="saveRoster" class="primary">Save roster for this class</button>
-
-      <div style="height:14px"></div>
-      <div class="section-title">Current rosters</div>
-      <div id="rosters"></div>
-    `;
-    viewEl.appendChild(card);
-
-    const rc = card.querySelector("#rc");
-    const rt = card.querySelector("#rt");
-    const saveRosterBtn = card.querySelector("#saveRoster");
-    const rostersDiv = card.querySelector("#rosters");
-
-    saveRosterBtn.onclick = ()=>{
-      const c = String(rc.value||"").trim();
-      if(!c){ showToast("Enter class first (e.g., 4C)."); return; }
-
-      const list = splitLines(rt.value);
-      if(!list.length){ showToast("Paste at least 1 name."); return; }
-
-      const existing = new Set(roster.map(e => norm(e.className)+"|"+norm(e.studentName)));
-      const adds = [];
-      uniqCI(list).forEach(n=>{
-        const key = norm(c)+"|"+norm(n);
-        if(!existing.has(key)){
-          existing.add(key);
-          adds.push({ className:c, studentName:n });
-        }
-      });
-
-      roster = roster.concat(adds).sort((a,b)=>{
-        const ac = norm(a.className).localeCompare(norm(b.className));
-        if(ac!==0) return ac;
-        return norm(a.studentName).localeCompare(norm(b.studentName));
-      });
-
-      rt.value = "";
-      save();
-      showToast("Saved roster for " + c + ".");
-      renderView();
-    };
-
-    const map = rosterByClass();
-    const classes = classOptions();
-
-    if(classes.length===0){
-      rostersDiv.innerHTML = `<div class="muted">No rosters yet.</div>`;
-      return;
-    }
-
-    classes.forEach(c=>{
-      const box = document.createElement("div");
-      box.style.border = "1px solid #e5e7eb";
-      box.style.borderRadius = "14px";
-      box.style.padding = "10px";
-      box.style.marginTop = "10px";
-
-      const top = document.createElement("div");
-      top.style.display="flex";
-      top.style.justifyContent="space-between";
-      top.style.gap="10px";
-      top.style.alignItems="center";
-
-      const left = document.createElement("div");
-      left.style.fontWeight="900";
-      left.textContent = c;
-
-      const clearBtn = document.createElement("button");
-      clearBtn.className="btn btn-red";
-      clearBtn.textContent="Clear class";
-      clearBtn.onclick=()=>{
-        const ok = window.confirm("Clear roster for class " + c + "?");
-        if(!ok) return;
-        roster = roster.filter(e => norm(e.className)!==norm(c));
-        save();
-        showToast("Cleared roster for " + c + ".");
-        renderView();
-      };
-
-      top.appendChild(left);
-      top.appendChild(clearBtn);
-
-      const chips = document.createElement("div");
-      chips.style.display="flex";
-      chips.style.flexWrap="wrap";
-      chips.style.gap="8px";
-      chips.style.marginTop="8px";
-
-      (map.get(c) || []).forEach(n=>{
-        const chip = document.createElement("button");
-        chip.className="chip";
-        chip.textContent = n;
-        chip.onclick=()=>{
-          const ok = window.confirm("Remove " + n + " from " + c + "?");
-          if(!ok) return;
-          roster = roster.filter(e => !(norm(e.className)===norm(c) && norm(e.studentName)===norm(n)));
-          save();
-          renderView();
-        };
-        chips.appendChild(chip);
-      });
-
-      const note = document.createElement("div");
-      note.className="hint";
-      note.textContent="Tap a name to remove.";
-
-      box.appendChild(top);
-      box.appendChild(chips);
-      box.appendChild(note);
-      rostersDiv.appendChild(box);
-    });
-  }
-
-function renderAll(){
-  viewEl.innerHTML = "";
-
-  const card = document.createElement("div");
-  card.className = "card";
-  card.innerHTML = `
-    <div class="section-title">All records</div>
-    <div class="hint">Includes Submitted/Lost too.</div>
-    <div class="hint" style="margin-top:6px;font-weight:900;">
-      Loaded records: <span id="recCount"></span>
-    </div>
-    <div id="list"></div>
-  `;
-  viewEl.appendChild(card);
-
-  const countEl = card.querySelector("#recCount");
-  const list = card.querySelector("#list");
-
-  countEl.textContent = String(records.length);
-
-  if (!records.length) {
-    const empty = document.createElement("div");
-    empty.className = "muted";
-    empty.style.marginTop = "8px";
-    empty.textContent = "No records found on this device.";
-    list.appendChild(empty);
-    return;
-  }
-
-  records.forEach((r) => {
-    try {
-      const el = recordCard(r);
-      if (el) list.appendChild(el);
-    } catch (e) {
-      const bad = document.createElement("div");
-      bad.className = "muted";
-      bad.style.marginTop = "8px";
-      bad.textContent = "A record failed to render (data still saved).";
-      list.appendChild(bad);
-    }
-  });
+  // show results immediately when you open tab
+  renderList();
 }
 
   // Reset buttons
