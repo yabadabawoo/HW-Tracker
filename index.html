@@ -636,19 +636,18 @@
     const meta = r.status===STATUS.OWED ? "OWED" : (r.status===STATUS.SUB ? "SUBMITTED" : "LOST");
 
     wrap.innerHTML = `
-      <div class="record-top">
-        <div>
-          <button class="namebtn" type="button" title="Tap name to generate message">
-            <div class="name"></div>
-            <div class="tap">Tap name to generate message</div>
-          </button>
-          <div style="margin-top:8px"><b>HW:</b> <span class="hw"></span></div>
-          <div class="muted" style="font-size:12px;margin-top:2px">Due: <span class="due"></span></div>
-        </div>
-        <div class="meta"></div>
-      </div>
-      <div class="actions"></div>
-    `;
+  <div style="font-size:20px;font-weight:700;color:#111;">
+    ${r.studentName}
+  </div>
+
+  <div style="font-size:15px;color:#444;margin-top:4px;">
+    ${r.homework}
+  </div>
+
+  <div style="font-size:13px;color:#777;margin-top:2px;">
+    ${r.className} • ${fmtDDMMMYY(r.date)}
+  </div>
+`;
 
     wrap.querySelector(".name").textContent = r.studentName + " (" + r.className + ")";
     wrap.querySelector(".hw").textContent = r.homework;
@@ -705,51 +704,68 @@
     return wrap;
   }
 
-  function renderFilter(mode){
-    viewEl.innerHTML = "";
+function renderFilter(mode){
+  viewEl.innerHTML = "";
 
-    const card = document.createElement("div");
-    card.className="card";
-    card.innerHTML = `
-      <div class="section-title"></div>
+  const card = document.createElement("div");
+  card.className="card";
+  card.innerHTML = `
+    <div class="section-title"></div>
+
+    <div style="display:grid;gap:8px;">
       <input id="q" placeholder="" />
-      <div class="hint">Shows OWED only.</div>
-      <div id="list"></div>
-    `;
-    viewEl.appendChild(card);
 
-    const title = card.querySelector(".section-title");
-    const q = card.querySelector("#q");
-    const list = card.querySelector("#list");
+      <select id="statusSel" style="width:100%;padding:10px 12px;border-radius:12px;border:1px solid #e5e7eb;font-size:14px;background:#fff;">
+        <option value="all">Status: All</option>
+        <option value="owed">Status: Owed</option>
+        <option value="submitted">Status: Submitted</option>
+        <option value="lost">Status: Lost</option>
+      </select>
+    </div>
 
-    if(mode==="student"){
-      title.textContent="Find owed homework by student";
-      q.placeholder="Type student name...";
-    }else if(mode==="homework"){
-      title.textContent="Find students owing a homework";
-      q.placeholder="Type homework...";
-    }else{
-      title.textContent="Find owed homework by class";
-      q.placeholder="Type class...";
-    }
+    <div class="hint">Filter results by status.</div>
+    <div id="list"></div>
+  `;
 
-    function renderList(){
-      const query = norm(q.value);
-      list.innerHTML = "";
-      if(!query) return;
+  viewEl.appendChild(card);
 
-      const filtered = records.filter(r=>{
-        if(r.status!==STATUS.OWED) return false;
-        if(mode==="student") return norm(r.studentName).includes(query);
-        if(mode==="homework") return norm(r.homework).includes(query);
-        return norm(r.className).includes(query);
-      });
+  const title = card.querySelector(".section-title");
+  const q = card.querySelector("#q");
+  const statusSel = card.querySelector("#statusSel");
+  const list = card.querySelector("#list");
 
-      filtered.forEach(r => list.appendChild(recordCard(r)));
-    }
-
-    q.addEventListener("input", renderList);
+  if(mode==="student"){
+    title.textContent="Find homework by student";
+    q.placeholder="Type student name...";
+  }else if(mode==="homework"){
+    title.textContent="Find students by homework";
+    q.placeholder="Type homework...";
+  }else{
+    title.textContent="Find homework by class";
+    q.placeholder="Type class...";
   }
+
+  function renderList(){
+    const query = norm(q.value);
+    const statusMode = statusSel.value;
+
+    list.innerHTML="";
+    if(!query) return;
+
+    const filtered = records.filter(r=>{
+      if(statusMode!=="all" && r.status!==statusMode) return false;
+
+      if(mode==="student") return norm(r.studentName).includes(query);
+      if(mode==="homework") return norm(r.homework).includes(query);
+      return norm(r.className).includes(query);
+    });
+
+    filtered.forEach(r => list.appendChild(recordCard(r)));
+  }
+
+  q.addEventListener("input", renderList);
+  statusSel.addEventListener("change", renderList);
+}
 
   function renderStudents(){
     viewEl.innerHTML = "";
