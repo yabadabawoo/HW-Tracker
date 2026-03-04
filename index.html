@@ -966,26 +966,48 @@ function renderFilter(mode){
     });
   }
 
-  function renderAll(){
-    viewEl.innerHTML = "";
-    const card = document.createElement("div");
-    card.className="card";
-    card.innerHTML = `
-      <div class="section-title">All records</div>
-      <div class="hint">Includes Submitted/Lost too.</div>
-      <div id="list"></div>
-    `;
-    viewEl.appendChild(card);
-    const list = card.querySelector("#list");
-    records.forEach(r => list.appendChild(recordCard(r)));
-    if(records.length===0){
-      const empty = document.createElement("div");
-      empty.className="muted";
-      empty.style.marginTop="8px";
-      empty.textContent="No records yet.";
-      list.appendChild(empty);
-    }
+function renderAll(){
+  viewEl.innerHTML = "";
+
+  const card = document.createElement("div");
+  card.className = "card";
+  card.innerHTML = `
+    <div class="section-title">All records</div>
+    <div class="hint">Includes Submitted/Lost too.</div>
+    <div class="hint" style="margin-top:6px;font-weight:900;">
+      Loaded records: <span id="recCount"></span>
+    </div>
+    <div id="list"></div>
+  `;
+  viewEl.appendChild(card);
+
+  const countEl = card.querySelector("#recCount");
+  const list = card.querySelector("#list");
+
+  countEl.textContent = String(records.length);
+
+  if (!records.length) {
+    const empty = document.createElement("div");
+    empty.className = "muted";
+    empty.style.marginTop = "8px";
+    empty.textContent = "No records found on this device.";
+    list.appendChild(empty);
+    return;
   }
+
+  records.forEach((r) => {
+    try {
+      const el = recordCard(r);
+      if (el) list.appendChild(el);
+    } catch (e) {
+      const bad = document.createElement("div");
+      bad.className = "muted";
+      bad.style.marginTop = "8px";
+      bad.textContent = "A record failed to render (data still saved).";
+      list.appendChild(bad);
+    }
+  });
+}
 
   // Reset buttons
   document.getElementById("btnResetHW").onclick = ()=>{
