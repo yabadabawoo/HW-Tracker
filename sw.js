@@ -1,4 +1,4 @@
-const CACHE_NAME = "hw-tracker-cache-v3";
+const CACHE_NAME = "hw-tracker-cache-v4";
 const ASSETS = [
   "./",
   "./index.html",
@@ -20,8 +20,26 @@ self.addEventListener("activate", (event) => {
   );
 });
 
+// Network-first for navigation (HTML), cache-first for everything else
 self.addEventListener("fetch", (event) => {
+  const req = event.request;
+
+  // When loading the page itself
+  if (req.mode === "navigate") {
+    event.respondWith(
+      fetch(req)
+        .then((res) => {
+          const copy = res.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put("./index.html", copy));
+          return res;
+        })
+        .catch(() => caches.match("./index.html"))
+    );
+    return;
+  }
+
+  // For other files (JS/CSS/icons)
   event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request))
+    caches.match(req).then((cached) => cached || fetch(req))
   );
 });
