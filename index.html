@@ -629,80 +629,141 @@
     renderDatalists(String(inClass.value||"").trim());
   }
 
-  function recordCard(r){
-    const wrap = document.createElement("div");
-    wrap.className = "record";
+function recordCard(r){
+  // ---- Safe field reads ----
+  const studentName = String(r.studentName || "").trim();
+  const className = String(r.className || "").trim();
+  const homework = String(r.homework || r.homeworkName || "").trim();
+  const due = String(r.dueDate || r.date || "").trim();
 
-    const meta = r.status===STATUS.OWED ? "OWED" : (r.status===STATUS.SUB ? "SUBMITTED" : "LOST");
+  // normalize status for display + buttons
+  const raw = String(r.status || "").trim().toLowerCase();
+  let status = raw;
+  if (raw === "sub" || raw === "submit" || raw === "submitted" || raw === "done") status = "submitted";
+  else if (raw === "owe" || raw === "owed") status = "owed";
+  else if (raw === "lost") status = "lost";
 
-    wrap.innerHTML = `
-  <div style="font-size:20px;font-weight:700;color:#111;">
-    ${r.studentName}
-  </div>
+  const wrap = document.createElement("div");
+  wrap.className = "record";
 
-  <div style="font-size:15px;color:#444;margin-top:4px;">
-    ${r.homework}
-  </div>
+  // ---- Top row ----
+  const top = document.createElement("div");
+  top.className = "record-top";
 
-  <div style="font-size:13px;color:#777;margin-top:2px;">
-    ${r.className} • ${fmtDDMMMYY(r.date)}
-  </div>
-`;
+  const left = document.createElement("div");
 
-    wrap.querySelector(".name").textContent = r.studentName + " (" + r.className + ")";
-    wrap.querySelector(".hw").textContent = r.homework;
-    wrap.querySelector(".due").textContent = fmtDDMMMYY(r.dueDate);
-    wrap.querySelector(".meta").textContent = meta;
+  const nameBtn = document.createElement("button");
+  nameBtn.type = "button";
+  nameBtn.className = "namebtn";
+  nameBtn.title = "Tap name to generate parent message";
 
-    // click name -> message
-    wrap.querySelector(".namebtn").onclick = ()=>{
-      const owedRows = records
-        .filter(x => x.status===STATUS.OWED && norm(x.studentName)===norm(r.studentName))
-        .map(x => ({ homework: x.homework, dueDate: x.dueDate }));
+  const nameLine = document.createElement("div");
+  nameLine.className = "name";
+  nameLine.style.fontSize = "20px";      // biggest
+  nameLine.style.fontWeight = "900";
+  nameLine.textContent = studentName + (className ? (" (" + className + ")") : "");
 
-      if(!owedRows.length){
-        showToast("No owed homework for this student.");
-        return;
-      }
+  const tap = document.createElement("div");
+  tap.className = "tap";
+  tap.textContent = "Tap name to generate message";
 
-      const msg = buildParentMessage(r.studentName, owedRows);
-      openModal("Message to parents - " + r.studentName, msg);
+  nameBtn.appendChild(nameLine);
+  nameBtn.appendChild(tap);
+
+  // Homework line (smaller than name)
+  const hwLine = document.createElement("div");
+  hwLine.style.marginTop = "8px";
+  hwLine.style.fontSize = "14px";
+  hwLine.innerHTML = "<b>HW:</b> " + (homework || "-");
+
+  // Due line
+  const dueLine = document.createElement("div");
+  dueLine.className = "muted";
+  dueLine.style.fontSize = "12px";
+  dueLine.style.marginTop = "2px";
+  dueLine.textContent = "Due: " + (due ? fmtDDMMMYY(due) : "-");
+
+  left.appendChild(nameBtn);
+  left.appendChild(hwLine);
+  left.appendChild(dueLine);
+
+  const right = document.createElement("div");
+  right.className = "meta";
+  right.textContent = status.toUpperCase();
+
+  top.appendChild(left);
+  top.appendChild(right);
+
+  // ---- Actions ----
+  const actions = document.createElement("div");
+  actions.className = "actions";
+
+  if (status === "owed") {
+    const btnSub = document.createElement("button");
+    btnSub.type = "button";
+    btnSub.className = "btn btn-green";
+    btnSub.textContent = "Submit";
+    btnSub.onclick = () => {
+      records = records.map(x => x.id === r.id ? ({ ...x, status: "submitted" }) : x);
+      save();
+      renderView();
     };
 
-    const actions = wrap.querySelector(".actions");
+    const btnLost = document.createElement("button");
+    btnLost.type = "button";
+    btnLost.className = "btn btn-red";
+    btnLost.textContent = "Lost";
+    btnLost.onclick = () => {
+      records = records.map(x => x.id === r.id ? ({ ...x, status: "lost" }) : x);
+      save();
+      renderView();
+    };
 
-    if(r.status===STATUS.OWED){
-      const b1 = document.createElement("button");
-      b1.className="btn btn-green";
-      b1.textContent="Submit";
-      b1.onclick=()=>{
-        records = records.map(x => x.id===r.id ? ({...x, status: STATUS.SUB}) : x);
-        save(); renderView();
-      };
+    actions.appendChild(btnSub);
+    actions.appendChild(btnLost);
+  } else {
+    const btnOwed = document.createElement("button");
+    btnOwed.type = "button";
+    btnOwed.className = "btn btn-dark";
+    btnOwed.textContent = "Mark Owed";
+    btnOwed.onclick = () => {
+      records = records.map(x => x.id === r.id ? ({ ...x, status: "owed" }) : x);
+      save();
+      renderView();
+    };
+    actions.appendChild(btnOwed);
+  }
 
-      const b2 = document.createElement("button");
-      b2.className="btn btn-red";
-      b2.textContent="Lost";
-      b2.onclick=()=>{
-        records = records.map(x => x.id===r.id ? ({...x, status: STATUS.LOST}) : x);
-        save(); renderView();
-      };
+  // ---- Name click -> parent message (owed only) ----
+  nameBtn.onclick = () => {
+    const owedRows = records
+      .filter(x => {
+        const xs = String(x.status || "").trim().toLowerCase();
+        const xStatus =
+          (xs === "submitted" || xs === "submit" || xs === "sub" || xs === "done") ? "submitted" :
+          (xs === "lost") ? "lost" :
+          "owed";
+        return xStatus === "owed" && norm(x.studentName) === norm(studentName);
+      })
+      .map(x => ({
+        homework: String(x.homework || x.homeworkName || "").trim(),
+        dueDate: String(x.dueDate || x.date || "").trim()
+      }));
 
-      actions.appendChild(b1);
-      actions.appendChild(b2);
-    }else{
-      const b = document.createElement("button");
-      b.className="btn btn-dark";
-      b.textContent="Mark Owed";
-      b.onclick=()=>{
-        records = records.map(x => x.id===r.id ? ({...x, status: STATUS.OWED}) : x);
-        save(); renderView();
-      };
-      actions.appendChild(b);
+    if (!owedRows.length) {
+      showToast("No owed homework for this student.");
+      return;
     }
 
-    return wrap;
-  }
+    const msg = buildParentMessage(studentName, owedRows);
+    openModal("Message to parents - " + studentName, msg);
+  };
+
+  wrap.appendChild(top);
+  wrap.appendChild(actions);
+
+  return wrap;
+}
 
 function renderFilter(mode){
   viewEl.innerHTML = "";
