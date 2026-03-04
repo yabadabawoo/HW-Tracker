@@ -723,10 +723,9 @@ function renderFilter(mode){
       </select>
     </div>
 
-    <div class="hint">Filter results by status.</div>
+    <div class="hint">Type to search, then choose a status filter.</div>
     <div id="list"></div>
   `;
-
   viewEl.appendChild(card);
 
   const title = card.querySelector(".section-title");
@@ -746,21 +745,34 @@ function renderFilter(mode){
   }
 
   function renderList(){
-    const query = norm(q.value);
-    const statusMode = statusSel.value;
+    const query = String(q.value || "").trim().toLowerCase();
+    const statusMode = String(statusSel.value || "all").trim().toLowerCase();
 
-    list.innerHTML="";
+    list.innerHTML = "";
     if(!query) return;
 
-    const filtered = records.filter(r=>{
-      if(statusMode!=="all" && r.status!==statusMode) return false;
+    const filtered = records.filter(r => {
+      const rStatus = String(r.status || "").trim().toLowerCase();
+      if(statusMode !== "all" && rStatus !== statusMode) return false;
 
-      if(mode==="student") return norm(r.studentName).includes(query);
-      if(mode==="homework") return norm(r.homework).includes(query);
-      return norm(r.className).includes(query);
+      const sName = String(r.studentName || "").trim().toLowerCase();
+      const sHw   = String(r.homework || r.homeworkName || "").trim().toLowerCase();
+      const sCls  = String(r.className || "").trim().toLowerCase();
+
+      if(mode==="student") return sName.includes(query);
+      if(mode==="homework") return sHw.includes(query);
+      return sCls.includes(query);
     });
 
     filtered.forEach(r => list.appendChild(recordCard(r)));
+
+    if(filtered.length === 0){
+      const empty = document.createElement("div");
+      empty.className="muted";
+      empty.style.marginTop="8px";
+      empty.textContent="No matches.";
+      list.appendChild(empty);
+    }
   }
 
   q.addEventListener("input", renderList);
